@@ -60,6 +60,15 @@ static String g_deviceId = FALLBACK_DEVICE_TOKEN;
 WiFiClientSecure secureClient;
 PubSubClient mqtt(secureClient);
 static uint32_t lastReconnectAttempt = 0;
+static uint32_t mqttConnectedSince = 0;
+// mqtt.connected() only reflects what the local socket THINKS, not real
+// liveness — a router/NAT can silently drop an idle connection without
+// ever sending a close/RST, leaving the board believing it's still
+// subscribed for a very long time (observed: 30+ minutes, during which
+// real orders were published and never arrived). Rather than trust
+// PubSubClient to detect that, proactively force a fresh session on a
+// schedule so staleness is always bounded.
+static const uint32_t MQTT_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
 
 // ─── Relay State ─────────────────────────────────────────────────
 struct RelayState {
@@ -165,6 +174,7 @@ void connectMQTT() {
   // Connect with Last Will & Testament (LWT)
   if (mqtt.connect(g_deviceId.c_str(), MQTT_USER, MQTT_PASS, statusTopic.c_str(), 1, true, "offline")) {
     Serial.println("[mqtt] CONNECTED!");
+    mqttConnectedSince = millis();
     mqtt.publish(statusTopic.c_str(), "online", true);
     mqtt.subscribe(cmdTopic.c_str(), 1);
     Serial.printf("[mqtt] Subscribed to %s\n", cmdTopic.c_str());
@@ -571,6 +581,14 @@ void loop() {
       connectMQTT();
     } else {
       mqtt.loop();
+
+      // Proactively refresh the session — see MQTT_REFRESH_INTERVAL_MS
+      // comment above. Skipped while an order is active so we never drop
+      // the connection mid-dispense.
+      if (!orderActive && millis() - mqttConnectedSince > MQTT_REFRESH_INTERVAL_MS) {
+        Serial.println("[mqtt] proactively refreshing session (periodic health check)");
+        mqtt.disconnect();
+      }
     }
   }
 
