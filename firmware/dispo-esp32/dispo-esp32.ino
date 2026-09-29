@@ -637,16 +637,19 @@ void loop() {
     }
   }
 
-  // Backup HTTP poller — only when MQTT is actually down. Without the
-  // !mqtt.connected() check this ran unconditionally every 5s and could
-  // race dispatchNextPendingOrder(): with two orders queued, this poll and
-  // an MQTT completion event could each independently claim a different
-  // one of them into "dispensing" at nearly the same moment, but the board
-  // only tracks one orderActive at a time — whichever arrives second gets
-  // silently dropped and sits "dispensing" until the stale sweep times it
-  // out 5 minutes later.
+  // Backup HTTP poller. Runs even while MQTT looks healthy, just at a much
+  // slower cadence — this is what actually catches a push that silently
+  // never arrived for any reason (a server-side publish that failed
+  // without us knowing, a message lost in a gap we haven't found yet,
+  // etc.), instead of the customer waiting out the full 90s stale-order
+  // timeout for something the board could have discovered on its own in
+  // under a minute. Fast (5s) fallback cadence when MQTT is actually
+  // down; slow (45s) safety-net cadence otherwise. /pending-orders'
+  // claim is now atomic server-side, so running this concurrently with
+  // an MQTT-triggered dispatch can't double-claim the same order.
   static uint32_t lastPoll = 0;
-  if (!orderActive && WiFi.status() == WL_CONNECTED && !mqtt.connected() && millis() - lastPoll > 5000) {
+  uint32_t pollInterval = mqtt.connected() ? 45000 : 5000;
+  if (!orderActive && WiFi.status() == WL_CONNECTED && millis() - lastPoll > pollInterval) {
     lastPoll = millis();
     pollPendingOrders();
   }
