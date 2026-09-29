@@ -169,7 +169,16 @@ void connectMQTT() {
     mqtt.subscribe(cmdTopic.c_str(), 1);
     Serial.printf("[mqtt] Subscribed to %s\n", cmdTopic.c_str());
   } else {
-    Serial.printf("[mqtt] connect failed, rc=%d. Retrying in 5s\n", mqtt.state());
+    // rc alone doesn't say WHY the transport failed — RSSI/heap here so a
+    // weak-signal or memory-fragmentation cause is visible instead of
+    // having to guess from the error code alone. Note WiFi.status() was
+    // already WL_CONNECTED for this call to even run (checked above and
+    // by the caller in loop()), so "connected" isn't the same as "good
+    // enough for a TLS handshake."
+    Serial.printf(
+      "[mqtt] connect failed, rc=%d, rssi=%d dBm, free heap=%u — retrying in 5s\n",
+      mqtt.state(), WiFi.RSSI(), (unsigned)ESP.getFreeHeap()
+    );
   }
 }
 
