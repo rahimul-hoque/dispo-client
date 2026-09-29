@@ -43,4 +43,8 @@ yarn-error.log*
 *.apk
 *.aab
 *.apk.zip
+
+# ESP32 firmware secrets (HiveMQ broker credentials) — never commit real
+# values; copy firmware/dispo-esp32/secrets.example.h to secrets.h locally
+firmware/**/secrets.h
 next-env.d.ts

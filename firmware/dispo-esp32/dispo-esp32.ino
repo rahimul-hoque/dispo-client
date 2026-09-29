@@ -9,17 +9,17 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include "secrets.h" // gitignored — copy secrets.example.h to secrets.h and fill in real values
 
 #define DEVICE_NAME "EZConnect-Min"
 
-// ─── Backend & HiveMQ Cloud Configuration ─────────────────────────
-static const char* SERVER_BASE_URL       = "https://vending-server.vercel.app";
-static const char* FALLBACK_DEVICE_TOKEN = "6bb54de2-db42-420d-943e-1d2c2bf087e0"; // Default token for testing
-
-static const char* MQTT_BROKER = "97bee182514646a19ef2298dec106c52.s1.eu.hivemq.cloud"; 
-static const int   MQTT_PORT   = 8883;
-static const char* MQTT_USER   = "frontend_Server";
-static const char* MQTT_PASS   = "samm258258";
+// ─── Backend Configuration ────────────────────────────────────────
+// HiveMQ broker/credentials and FALLBACK_DEVICE_TOKEN now live in secrets.h,
+// which is gitignored — this file used to have the real HiveMQ password
+// committed in plaintext to a public repo. If you're reading this after
+// that leak: the fix was rotating the credential in the HiveMQ Cloud
+// console, not just moving the string to a different file.
+static const char* SERVER_BASE_URL = "https://vending-server.vercel.app";
 
 // ─── BLE UUIDs ───────────────────────────────────────────────────
 static const char *SVC_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
@@ -191,25 +191,21 @@ static void pollPendingOrders() {
   http.end();
 }
 
-// ─── Order Reporting (Sends BOTH MQTT & HTTP PATCH) ───────────────
+// ─── Order Reporting (MQTT only) ──────────────────────────────────
+// Used to also fire an equivalent HTTP PATCH alongside every MQTT publish
+// "just in case MQTT was asleep." Dropped that: it was two independent
+// implementations of the same event (exactly the kind of duplication that
+// let the MQTT "complete" handler drift out of sync with the HTTP route's
+// guards server-side before), for no real benefit — if the board's MQTT
+// session is down, the HTTP calls would've needed their own WiFi/network
+// path anyway, and the 5-minute stale-order sweep already exists precisely
+// to recover from a board that can't report in at all.
 static void completeOrder(const String &id) {
-  // 1. Publish to MQTT
   if (mqtt.connected()) {
     String topic = "devices/" + g_deviceId + "/complete";
     String body = "{\"orderId\":\"" + id + "\"}";
-    mqtt.publish(topic.c_str(), body.c_str(), true);
+    mqtt.publish(topic.c_str(), body.c_str()); // not retained — this is a one-off event, not device state
   }
-
-  // 2. Also send HTTP PATCH (ensures Vercel updates even if MQTT listener is asleep)
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    String url = String(SERVER_BASE_URL) + "/api/devices/by-token/" + g_deviceId + "/orders/" + id + "/complete";
-    http.begin(url);
-    int code = http.PATCH("");
-    Serial.printf("[http] complete PATCH -> %d\n", code);
-    http.end();
-  }
-
   Serial.printf("[ordr] Order %s complete reported to cloud\n", id.c_str());
 }
 
@@ -219,30 +215,13 @@ static void reportProgress(const String &id, uint8_t slotNumber) {
     String body = "{\"orderId\":\"" + id + "\",\"slotNumber\":" + String(slotNumber) + "}";
     mqtt.publish(topic.c_str(), body.c_str());
   }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    String url = String(SERVER_BASE_URL) + "/api/devices/by-token/" + g_deviceId + "/orders/" + id + "/items/" + String(slotNumber) + "/progress";
-    http.begin(url);
-    http.PATCH("");
-    http.end();
-  }
 }
 
 static void failOrder(const String &id, const String &reason) {
   if (mqtt.connected()) {
     String topic = "devices/" + g_deviceId + "/fail";
     String body = "{\"orderId\":\"" + id + "\",\"reason\":\"" + reason + "\"}";
-    mqtt.publish(topic.c_str(), body.c_str(), true);
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    String url = String(SERVER_BASE_URL) + "/api/devices/by-token/" + g_deviceId + "/orders/" + id + "/fail";
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    http.PATCH("{\"reason\":\"" + reason + "\"}");
-    http.end();
+    mqtt.publish(topic.c_str(), body.c_str()); // not retained, same reasoning as completeOrder
   }
   Serial.printf("[ordr] Order %s failed reported: %s\n", id.c_str(), reason.c_str());
 }
@@ -586,9 +565,16 @@ void loop() {
     }
   }
 
-  // Backup HTTP Poller: Checks for orders every 5s in case MQTT dropped
+  // Backup HTTP poller — only when MQTT is actually down. Without the
+  // !mqtt.connected() check this ran unconditionally every 5s and could
+  // race dispatchNextPendingOrder(): with two orders queued, this poll and
+  // an MQTT completion event could each independently claim a different
+  // one of them into "dispensing" at nearly the same moment, but the board
+  // only tracks one orderActive at a time — whichever arrives second gets
+  // silently dropped and sits "dispensing" until the stale sweep times it
+  // out 5 minutes later.
   static uint32_t lastPoll = 0;
-  if (!orderActive && WiFi.status() == WL_CONNECTED && millis() - lastPoll > 5000) {
+  if (!orderActive && WiFi.status() == WL_CONNECTED && !mqtt.connected() && millis() - lastPoll > 5000) {
     lastPoll = millis();
     pollPendingOrders();
   }
