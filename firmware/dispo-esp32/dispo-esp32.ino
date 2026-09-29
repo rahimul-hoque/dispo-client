@@ -171,8 +171,13 @@ void connectMQTT() {
   String statusTopic = "devices/" + g_deviceId + "/status";
   String cmdTopic    = "devices/" + g_deviceId + "/dispense";
 
-  // Connect with Last Will & Testament (LWT)
-  if (mqtt.connect(g_deviceId.c_str(), MQTT_USER, MQTT_PASS, statusTopic.c_str(), 1, true, "offline")) {
+  // Connect with Last Will & Testament (LWT). cleanSession=false so the
+  // broker keeps our subscription + queues any QoS-1 messages published
+  // while we're briefly disconnected (e.g. during the periodic session
+  // refresh above) and delivers them the moment we reconnect with this
+  // same client ID — without this, a dispense published during that
+  // reconnect window would just be dropped with nowhere to land.
+  if (mqtt.connect(g_deviceId.c_str(), MQTT_USER, MQTT_PASS, statusTopic.c_str(), 1, true, "offline", false)) {
     Serial.println("[mqtt] CONNECTED!");
     mqttConnectedSince = millis();
     mqtt.publish(statusTopic.c_str(), "online", true);
