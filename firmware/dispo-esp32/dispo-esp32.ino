@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <Preferences.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -11,7 +12,10 @@
 
 #define DEVICE_NAME "EZConnect-Min"
 
-// ─── HiveMQ Cloud Configuration ──────────────────────────────────
+// ─── Backend & HiveMQ Cloud Configuration ─────────────────────────
+static const char* SERVER_BASE_URL       = "https://vending-server.vercel.app";
+static const char* FALLBACK_DEVICE_TOKEN = "6bb54de2-db42-420d-943e-1d2c2bf087e0"; // Default token for testing
+
 static const char* MQTT_BROKER = "97bee182514646a19ef2298dec106c52.s1.eu.hivemq.cloud"; 
 static const int   MQTT_PORT   = 8883;
 static const char* MQTT_USER   = "frontend_Server";
@@ -50,7 +54,7 @@ Preferences prefs;
 static portMUX_TYPE payloadMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool havePayload = false;
 static String payload = "";
-static String g_deviceId = "unprovisioned";
+static String g_deviceId = FALLBACK_DEVICE_TOKEN;
 
 // ─── MQTT Globals ────────────────────────────────────────────────
 WiFiClientSecure secureClient;
@@ -89,26 +93,22 @@ static void advanceOrderProgress();
 static void completeOrder(const String &id);
 static void failOrder(const String &id, const String &reason);
 static void reportProgress(const String &id, uint8_t slotNumber);
+static void pollPendingOrders();
 
-// ─── MQTT Callback (Processes incoming orders from backend) ──────
-void mqttCallback(char* topic, byte* message, unsigned int length) {
+// ─── Order Parser (Handles both MQTT push & HTTP poll) ────────────
+void handleIncomingOrder(const String &json) {
   if (orderActive) {
-    Serial.printf("[mqtt] already dispensing order %s — ignoring duplicate push to protect hardware\n", orderId.c_str());
+    Serial.printf("[ordr] already dispensing order %s — ignoring trigger\n", orderId.c_str());
     return;
   }
-
-  String json = "";
-  for (unsigned int i = 0; i < length; i++) json += (char)message[i];
-  Serial.printf("[mqtt] Order received on %s: %s\n", topic, json.c_str());
 
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, json);
   if (err) {
-    Serial.printf("[mqtt] JSON parse error: %s\n", err.c_str());
+    Serial.printf("[ordr] JSON parse error: %s\n", err.c_str());
     return;
   }
 
-  // Handle direct slot test command if triggered
   if (doc["slot"].is<int>()) {
     triggerSlot((uint8_t)(doc["slot"].as<int>() - 1));
     return;
@@ -138,12 +138,22 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
   orderSettleUntil = 0;
   orderStartedAt = millis();
   orderActive = true;
-  Serial.printf("[ordr] Starting order %s (%u line item(s))\n", orderId.c_str(), orderItemCount);
+  Serial.printf("\n=========================================\n");
+  Serial.printf("[ordr] DISPENSING ORDER: %s\n", orderId.c_str());
+  Serial.printf("[ordr] %u line item(s) to dispense\n", orderItemCount);
+  Serial.printf("=========================================\n");
+}
+
+void mqttCallback(char* topic, byte* message, unsigned int length) {
+  String json = "";
+  for (unsigned int i = 0; i < length; i++) json += (char)message[i];
+  Serial.printf("[mqtt] push arrived on %s\n", topic);
+  handleIncomingOrder(json);
 }
 
 // ─── MQTT Connection & Topics ────────────────────────────────────
 void connectMQTT() {
-  if (mqtt.connected() || g_deviceId == "unprovisioned") return;
+  if (mqtt.connected() || g_deviceId == "unprovisioned" || WiFi.status() != WL_CONNECTED) return;
   if (millis() - lastReconnectAttempt < 5000) return;
   lastReconnectAttempt = millis();
 
@@ -157,34 +167,83 @@ void connectMQTT() {
     Serial.println("[mqtt] CONNECTED!");
     mqtt.publish(statusTopic.c_str(), "online", true);
     mqtt.subscribe(cmdTopic.c_str(), 1);
-    Serial.printf("[mqtt] Subscribed to %s (instant push ready)\n", cmdTopic.c_str());
+    Serial.printf("[mqtt] Subscribed to %s\n", cmdTopic.c_str());
   } else {
     Serial.printf("[mqtt] connect failed, rc=%d. Retrying in 5s\n", mqtt.state());
   }
 }
 
-// ─── MQTT Order Reporting & Telemetry ────────────────────────────
+// ─── HTTP Polling Backup (Guarantees orders are never missed) ─────
+static void pollPendingOrders() {
+  if (orderActive || WiFi.status() != WL_CONNECTED || g_deviceId == "unprovisioned") return;
+
+  HTTPClient http;
+  String url = String(SERVER_BASE_URL) + "/api/devices/by-token/" + g_deviceId + "/pending-orders";
+  http.begin(url);
+  int code = http.GET();
+  if (code == 200) {
+    String json = http.getString();
+    if (json.indexOf("\"orderId\"") != -1) {
+      Serial.printf("[http] Found pending order via HTTP backup!\n");
+      handleIncomingOrder(json);
+    }
+  }
+  http.end();
+}
+
+// ─── Order Reporting (Sends BOTH MQTT & HTTP PATCH) ───────────────
 static void completeOrder(const String &id) {
-  if (!mqtt.connected()) return;
-  String topic = "devices/" + g_deviceId + "/complete";
-  String body = "{\"orderId\":\"" + id + "\"}";
-  mqtt.publish(topic.c_str(), body.c_str(), true);
+  // 1. Publish to MQTT
+  if (mqtt.connected()) {
+    String topic = "devices/" + g_deviceId + "/complete";
+    String body = "{\"orderId\":\"" + id + "\"}";
+    mqtt.publish(topic.c_str(), body.c_str(), true);
+  }
+
+  // 2. Also send HTTP PATCH (ensures Vercel updates even if MQTT listener is asleep)
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = String(SERVER_BASE_URL) + "/api/devices/by-token/" + g_deviceId + "/orders/" + id + "/complete";
+    http.begin(url);
+    int code = http.PATCH("");
+    Serial.printf("[http] complete PATCH -> %d\n", code);
+    http.end();
+  }
+
   Serial.printf("[ordr] Order %s complete reported to cloud\n", id.c_str());
 }
 
 static void reportProgress(const String &id, uint8_t slotNumber) {
-  if (!mqtt.connected()) return;
-  String topic = "devices/" + g_deviceId + "/progress";
-  String body = "{\"orderId\":\"" + id + "\",\"slotNumber\":" + String(slotNumber) + "}";
-  mqtt.publish(topic.c_str(), body.c_str());
-  Serial.printf("[ordr] Order %s progress reported: slot %u\n", id.c_str(), slotNumber);
+  if (mqtt.connected()) {
+    String topic = "devices/" + g_deviceId + "/progress";
+    String body = "{\"orderId\":\"" + id + "\",\"slotNumber\":" + String(slotNumber) + "}";
+    mqtt.publish(topic.c_str(), body.c_str());
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = String(SERVER_BASE_URL) + "/api/devices/by-token/" + g_deviceId + "/orders/" + id + "/items/" + String(slotNumber) + "/progress";
+    http.begin(url);
+    http.PATCH("");
+    http.end();
+  }
 }
 
 static void failOrder(const String &id, const String &reason) {
-  if (!mqtt.connected()) return;
-  String topic = "devices/" + g_deviceId + "/fail";
-  String body = "{\"orderId\":\"" + id + "\",\"reason\":\"" + reason + "\"}";
-  mqtt.publish(topic.c_str(), body.c_str(), true);
+  if (mqtt.connected()) {
+    String topic = "devices/" + g_deviceId + "/fail";
+    String body = "{\"orderId\":\"" + id + "\",\"reason\":\"" + reason + "\"}";
+    mqtt.publish(topic.c_str(), body.c_str(), true);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = String(SERVER_BASE_URL) + "/api/devices/by-token/" + g_deviceId + "/orders/" + id + "/fail";
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    http.PATCH("{\"reason\":\"" + reason + "\"}");
+    http.end();
+  }
   Serial.printf("[ordr] Order %s failed reported: %s\n", id.c_str(), reason.c_str());
 }
 
@@ -209,7 +268,6 @@ static void sendTelemetry() {
 static void driveOrder() {
   if (!orderActive) return;
 
-  // Timeout watchdog: abort order if mechanical jam lasts > 60s
   if (millis() - orderStartedAt > ORDER_MAX_DURATION_MS) {
     Serial.printf("[ordr] Order %s timed out — reporting failure\n", orderId.c_str());
     failOrder(orderId, "device_timeout");
@@ -217,7 +275,6 @@ static void driveOrder() {
     return;
   }
 
-  // Settle gap between pulses
   if (millis() < orderSettleUntil) return;
 
   uint8_t slotIdx = orderItems[orderItemIdx].slotNumber - 1;
@@ -242,7 +299,7 @@ static void advanceOrderProgress() {
     return;
   }
 
-  Serial.printf("[ordr] order %s fully dispensed\n", orderId.c_str());
+  Serial.printf("[ordr] order %s fully dispensed!\n", orderId.c_str());
   completeOrder(orderId);
   orderActive = false;
 }
@@ -343,7 +400,7 @@ static void enableSetupMode() {
   setupMode = true;
   setupStartTime = millis();
   BLEDevice::startAdvertising();
-  Serial.println("\n[mode] 🟢 SETUP MODE ENABLED (BLE active, holding for 60s)");
+  Serial.println("\n[mode] 🟢 SETUP MODE ENABLED (BLE active for 60s)");
 }
 
 static void disableSetupMode() {
@@ -354,7 +411,7 @@ static void disableSetupMode() {
     delay(100); 
   }
   BLEDevice::getAdvertising()->stop();
-  Serial.println("\n[mode] 🔴 SETUP MODE DISABLED (BLE stopped, secured)");
+  Serial.println("\n[mode] 🔴 SETUP MODE DISABLED (BLE stopped)");
 }
 
 static void handleButtonAndTimeout() {
@@ -397,7 +454,7 @@ static void connectWiFi(const String &ssid, const String &pass) {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[wifi] CONNECTED, IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[wifi] CONNECTED! IP: %s\n", WiFi.localIP().toString().c_str());
     notifyStatus("CONNECTED," + WiFi.localIP().toString());
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   } else {
@@ -485,10 +542,17 @@ void setup() {
 
   prefs.begin("device", true);
   String savedId = prefs.getString("id", "");
-  if (savedId.length() > 0) g_deviceId = savedId;
+  if (savedId.length() > 0) {
+    g_deviceId = savedId;
+  } else {
+    g_deviceId = FALLBACK_DEVICE_TOKEN; // Default to active token
+  }
   prefs.end();
 
-  Serial.printf("[boot] Device ID on file: %s\n", g_deviceId.c_str());
+  Serial.printf("\n=========================================\n");
+  Serial.printf("  Dispo Controller Active\n");
+  Serial.printf("  Device Token: %s\n", g_deviceId.c_str());
+  Serial.printf("=========================================\n");
 
   if (ssid.length()) {
     connectWiFi(ssid, pass);
@@ -520,6 +584,13 @@ void loop() {
     } else {
       mqtt.loop();
     }
+  }
+
+  // Backup HTTP Poller: Checks for orders every 5s in case MQTT dropped
+  static uint32_t lastPoll = 0;
+  if (!orderActive && WiFi.status() == WL_CONNECTED && millis() - lastPoll > 5000) {
+    lastPoll = millis();
+    pollPendingOrders();
   }
 
   static uint32_t lastTelemetry = 0;
