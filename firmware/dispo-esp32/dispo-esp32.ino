@@ -49,6 +49,19 @@ static uint16_t bleConnId = 0;
 
 // ─── System Globals ──────────────────────────────────────────────
 static const uint32_t TELEMETRY_INTERVAL_MS = 30000;
+static const uint32_t TELEMETRY_INTERVAL_IDLE_MS = 120000; // slower cadence while nothing's happening
+
+// ─── Idle / Active State ───────────────────────────────────────────
+// WiFi and MQTT stay connected and subscribed in both states — this is
+// NOT sleep, and deliberately so: the board is mains-powered (no battery
+// to save), and an actually-disconnected board can't receive an instant
+// MQTT push, only find out about an order on its next scheduled wake —
+// exactly the unreliable polling pattern this firmware moved away from.
+// "Idle" here just means quieter (slower telemetry) while resting.
+enum class BoardState { IDLE, ACTIVE };
+static BoardState boardState = BoardState::IDLE;
+static uint32_t lastActivityAt = 0; // millis() of the last order starting or finishing
+static const uint32_t IDLE_AFTER_MS = 5 * 60 * 1000; // no order activity for this long -> back to idle
 
 Preferences prefs;
 static portMUX_TYPE payloadMux = portMUX_INITIALIZER_UNLOCKED;
@@ -102,6 +115,8 @@ static void advanceOrderProgress();
 static void completeOrder(const String &id);
 static void failOrder(const String &id, const String &reason);
 static void reportProgress(const String &id, uint8_t slotNumber);
+static void enterActiveState(const String &reasonOrderId);
+static void updateBoardState();
 static void pollPendingOrders();
 
 // ─── Order Parser (Handles both MQTT push & HTTP poll) ────────────
@@ -147,10 +162,32 @@ void handleIncomingOrder(const String &json) {
   orderSettleUntil = 0;
   orderStartedAt = millis();
   orderActive = true;
+  enterActiveState(orderId);
   Serial.printf("\n=========================================\n");
   Serial.printf("[ordr] DISPENSING ORDER: %s\n", orderId.c_str());
   Serial.printf("[ordr] %u line item(s) to dispense\n", orderItemCount);
   Serial.printf("=========================================\n");
+}
+
+// Marks the board as active (an order just started or finished) and
+// resets the idle countdown. WiFi/MQTT are untouched either way — see
+// the BoardState comment above for why this never disconnects anything.
+static void enterActiveState(const String &reasonOrderId) {
+  lastActivityAt = millis();
+  if (boardState != BoardState::ACTIVE) {
+    boardState = BoardState::ACTIVE;
+    Serial.printf("[state] ACTIVE - dispensing order %s\n", reasonOrderId.c_str());
+  }
+}
+
+// Called every loop() iteration. Only transitions ACTIVE -> IDLE; going
+// IDLE -> ACTIVE happens immediately when a new order arrives, not on a
+// timer.
+static void updateBoardState() {
+  if (boardState == BoardState::ACTIVE && !orderActive && millis() - lastActivityAt > IDLE_AFTER_MS) {
+    boardState = BoardState::IDLE;
+    Serial.println("[state] IDLE");
+  }
 }
 
 void mqttCallback(char* topic, byte* message, unsigned int length) {
@@ -275,6 +312,7 @@ static void driveOrder() {
     Serial.printf("[ordr] Order %s timed out — reporting failure\n", orderId.c_str());
     failOrder(orderId, "device_timeout");
     orderActive = false;
+    lastActivityAt = millis(); // idle countdown starts from when this actually ended, not when it started
     return;
   }
 
@@ -305,6 +343,7 @@ static void advanceOrderProgress() {
   Serial.printf("[ordr] order %s fully dispensed!\n", orderId.c_str());
   completeOrder(orderId);
   orderActive = false;
+  lastActivityAt = millis(); // idle countdown starts from when this actually ended, not when it started
 }
 
 // ─── Relay Service & Completion ──────────────────────────────────
@@ -580,6 +619,7 @@ void loop() {
 
   serviceRelays();
   driveOrder();
+  updateBoardState();
 
   if (WiFi.status() == WL_CONNECTED) {
     if (!mqtt.connected()) {
@@ -612,7 +652,8 @@ void loop() {
   }
 
   static uint32_t lastTelemetry = 0;
-  if (millis() - lastTelemetry > TELEMETRY_INTERVAL_MS) {
+  uint32_t telemetryInterval = (boardState == BoardState::IDLE) ? TELEMETRY_INTERVAL_IDLE_MS : TELEMETRY_INTERVAL_MS;
+  if (millis() - lastTelemetry > telemetryInterval) {
     lastTelemetry = millis();
     sendTelemetry();
   }
