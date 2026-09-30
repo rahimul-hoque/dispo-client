@@ -637,18 +637,17 @@ void loop() {
     }
   }
 
-  // Backup HTTP poller. Runs even while MQTT looks healthy, just at a much
-  // slower cadence — this is what actually catches a push that silently
-  // never arrived for any reason (a server-side publish that failed
-  // without us knowing, a message lost in a gap we haven't found yet,
-  // etc.), instead of the customer waiting out the full 90s stale-order
-  // timeout for something the board could have discovered on its own in
-  // under a minute. Fast (5s) fallback cadence when MQTT is actually
-  // down; slow (45s) safety-net cadence otherwise. /pending-orders'
-  // claim is now atomic server-side, so running this concurrently with
-  // an MQTT-triggered dispatch can't double-claim the same order.
+  // Backup HTTP poller. Runs even while MQTT looks healthy — real-device
+  // testing found the server's publish silently failing in production for
+  // reasons not yet pinned down (works reliably in isolated testing, fails
+  // in the actual deployed environment), so for now this poll is the
+  // dependable path, not just a rare safety net. Same interval either way
+  // until the publish path's production reliability is actually
+  // confirmed. /pending-orders' claim is atomic server-side, so running
+  // this concurrently with an MQTT-triggered dispatch can't double-claim
+  // the same order — safe to poll this often.
   static uint32_t lastPoll = 0;
-  uint32_t pollInterval = mqtt.connected() ? 45000 : 5000;
+  uint32_t pollInterval = 5000;
   if (!orderActive && WiFi.status() == WL_CONNECTED && millis() - lastPoll > pollInterval) {
     lastPoll = millis();
     pollPendingOrders();
