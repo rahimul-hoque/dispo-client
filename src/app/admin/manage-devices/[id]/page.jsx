@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { QRCodeSVG } from "qrcode.react";
@@ -20,8 +20,10 @@ import {
   Boxes3,
   Picture,
   ArrowRight,
+  ArrowRotateLeft,
 } from "@gravity-ui/icons";
 import { Modal, toast, useOverlayState, Spinner } from "@heroui/react";
+import { connectToBoard, isBluetoothSupported } from "@/lib/ble";
 
 const DEVICE_TYPE_LABELS = {
   coffee_machine: "Coffee Machine",
@@ -42,6 +44,21 @@ export default function ManageDeviceDetailPage() {
 
   const deleteModal = useOverlayState();
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Re-provisioning: for when the physical board is lost, factory-reset,
+  // or swapped out — this device's own record (owner, products, order
+  // history, qrToken) never changes, we're just re-sending its existing
+  // ID to whatever board is nearby over Bluetooth so it adopts this
+  // device's identity again. Same BLE protocol as first-time provisioning
+  // in /admin/devices, just targeting an existing device instead of a
+  // freshly-created one.
+  const [isReprovisionOpen, setIsReprovisionOpen] = useState(false);
+  const [isBleSupported, setIsBleSupported] = useState(true);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [isSendingId, setIsSendingId] = useState(false);
+  const [reprovisionStatus, setReprovisionStatus] = useState(null); // { tone, text }
+  const boardRef = useRef(null);
 
   // Add-product form — scoped to just this device, no dropdown needed
   // since we already know which device we're on from the URL.
@@ -128,6 +145,87 @@ export default function ManageDeviceDetailPage() {
   useEffect(() => {
     load();
   }, [id]);
+
+  useEffect(() => {
+    setIsBleSupported(isBluetoothSupported());
+  }, []);
+
+  const openReprovision = () => {
+    setIsReprovisionOpen(true);
+    setIsConnected(false);
+    setReprovisionStatus(null);
+    boardRef.current = null;
+  };
+
+  const closeReprovision = () => {
+    setIsReprovisionOpen(false);
+    setIsConnected(false);
+    setReprovisionStatus(null);
+    boardRef.current = null;
+  };
+
+  const handleReprovisionNotify = (text) => {
+    if (text === "DEVICEID_SET") {
+      setReprovisionStatus({ tone: "ok", text: "Board confirmed — it's reconnected to this device." });
+      confirmReprovision();
+    } else if (text === "DEVICEID_FAILED") {
+      setReprovisionStatus({ tone: "fault", text: "The board couldn't store this ID — try sending again." });
+    }
+  };
+
+  const handleReprovisionConnect = async () => {
+    setIsConnecting(true);
+    try {
+      const board = await connectToBoard({
+        onNotify: handleReprovisionNotify,
+        onDisconnect: () => {
+          setIsConnected(false);
+          boardRef.current = null;
+          setReprovisionStatus({ tone: "fault", text: "Bluetooth connection lost" });
+        },
+      });
+      boardRef.current = board;
+      setIsConnected(true);
+      toast.success("Connected to board");
+    } catch (error) {
+      console.log(error);
+      toast.danger("Couldn't connect", {
+        description: error.message || "Make sure the board is powered on and nearby.",
+      });
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const sendReprovisionId = async () => {
+    if (!boardRef.current || !device) return;
+    setIsSendingId(true);
+    try {
+      const command = `dvi_${device.qrToken}\n`;
+      await boardRef.current.write(command);
+      setReprovisionStatus({ tone: "wait", text: "Sent — waiting for the board to confirm…" });
+    } catch (error) {
+      console.log(error);
+      toast.danger("Couldn't send", {
+        description: "The Bluetooth connection may have dropped — reconnect and try again.",
+      });
+    } finally {
+      setIsSendingId(false);
+    }
+  };
+
+  // Reuses the same provision-status endpoint first-time provisioning
+  // uses — it just stamps confirmedAt, and doesn't care whether the
+  // device was already claimed, so it works unchanged for a re-confirm.
+  const confirmReprovision = async () => {
+    if (!device) return;
+    try {
+      await fetch(`/api/proxy/devices/${device._id}/provision-status`, { method: "PATCH" });
+      setDevice((prev) => (prev ? { ...prev, confirmedAt: new Date().toISOString() } : prev));
+    } catch (error) {
+      console.log(error);
+    }
+  };
 
   const openEdit = () => {
     editForm.reset({ name: device.name, slotCount: device.slotCount, status: device.status });
@@ -383,6 +481,103 @@ export default function ManageDeviceDetailPage() {
                   <Printer className="h-4 w-4" />
                 </button>
               </div>
+            </div>
+
+            {/* Re-provision — board lost, reset, or swapped */}
+            <div className="mt-4 rounded-2xl bg-surface p-5">
+              {!isReprovisionOpen ? (
+                <>
+                  <div className="mb-2 flex items-center gap-2">
+                    <ArrowRotateLeft className="h-4 w-4 text-tertiary shrink-0" />
+                    <span className="font-label-md text-label-md text-on-surface font-semibold">
+                      Board lost, reset, or swapped?
+                    </span>
+                  </div>
+                  <p className="font-body-sm text-body-sm text-on-surface-variant mb-3">
+                    Reconnect a new or factory-reset board to this exact device — its name,
+                    owner, products, and order history all stay exactly as they are. Nothing
+                    changes except which physical board answers to this device&apos;s ID.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={openReprovision}
+                    className="flex items-center gap-2 rounded-full bg-surface-container-low px-4 py-2 font-label-md text-label-md text-on-surface-variant shadow-[3px_3px_8px_rgba(184,196,214,0.5)] hover:text-primary-container transition-colors cursor-pointer"
+                  >
+                    <PlugConnection className="h-4 w-4" />
+                    Re-provision to a board
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="mb-3 flex items-center justify-between">
+                    <span className="font-label-md text-label-md text-on-surface font-semibold">
+                      Connect to the board
+                    </span>
+                    <button
+                      type="button"
+                      onClick={closeReprovision}
+                      className="font-label-sm text-label-sm text-on-surface-variant hover:text-primary-container transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  <p className="font-body-sm text-body-sm text-on-surface-variant mb-3">
+                    Power on the board (or hold its setup button for 3 seconds), then connect
+                    over Bluetooth to send it this device&apos;s ID.
+                  </p>
+
+                  {!isBleSupported ? (
+                    <div className="flex items-center gap-2 rounded-2xl bg-error-container p-4">
+                      <TriangleExclamation className="h-4 w-4 text-on-error-container shrink-0" />
+                      <p className="font-body-sm text-body-sm text-on-error-container">
+                        This browser can&apos;t do Bluetooth setup. Use Chrome or Edge.
+                      </p>
+                    </div>
+                  ) : !isConnected ? (
+                    <button
+                      onClick={handleReprovisionConnect}
+                      disabled={isConnecting}
+                      className="flex w-full items-center justify-center gap-2 rounded-full bg-primary-container px-5 py-3 font-label-lg text-label-lg text-on-primary disabled:opacity-70 cursor-pointer"
+                    >
+                      {isConnecting ? <Spinner size="sm" color="current" /> : <PlugConnection className="h-4 w-4" />}
+                      {isConnecting ? "Connecting…" : "Connect to board"}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={sendReprovisionId}
+                      disabled={isSendingId || reprovisionStatus?.tone === "ok"}
+                      className={`flex w-full items-center justify-center gap-2 rounded-full px-5 py-3 font-label-lg text-label-lg transition-colors cursor-pointer disabled:cursor-not-allowed ${
+                        reprovisionStatus?.tone === "ok"
+                          ? "bg-emerald-500 text-white disabled:opacity-100"
+                          : "bg-primary-container text-on-primary disabled:opacity-70"
+                      }`}
+                    >
+                      {reprovisionStatus?.tone === "ok" ? (
+                        <CircleCheck className="h-4 w-4" />
+                      ) : isSendingId ? (
+                        <Spinner size="sm" color="current" />
+                      ) : (
+                        <ArrowRight className="h-4 w-4" />
+                      )}
+                      {reprovisionStatus?.tone === "ok" ? "Confirmed" : "Send device ID"}
+                    </button>
+                  )}
+
+                  {reprovisionStatus && (
+                    <div
+                      className={`mt-3 rounded-2xl p-3 text-center font-body-sm text-body-sm ${
+                        reprovisionStatus.tone === "ok"
+                          ? "bg-primary-fixed text-on-primary-fixed-variant"
+                          : reprovisionStatus.tone === "fault"
+                          ? "bg-error-container text-on-error-container"
+                          : "bg-surface-container text-on-surface-variant"
+                      }`}
+                    >
+                      {reprovisionStatus.text}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
 
