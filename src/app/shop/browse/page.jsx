@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import useSWR from "swr";
 import { fetcher } from "@/lib/fetcher";
-import { Box, Magnifier, ShoppingCart, Server, ArrowLeft } from "@gravity-ui/icons";
+import { Box, Magnifier, ShoppingCart, Server, ArrowLeft, TriangleExclamation } from "@gravity-ui/icons";
 import { toast } from "@heroui/react";
 import { useCart } from "@/lib/cart-context";
 
@@ -49,6 +49,13 @@ function BrowsePageContent() {
     return match ? match.name : null;
   }, [deviceId, publicDevices]);
 
+  // /devices/public only lists active machines, so once it has loaded a
+  // device that's missing from it has been deactivated by its owner/admin.
+  const deviceInactive = useMemo(
+    () => !!deviceId && Array.isArray(publicDevices) && !publicDevices.some((d) => d._id === deviceId),
+    [deviceId, publicDevices]
+  );
+
   const filteredProducts = useMemo(() => {
     if (!query.trim()) return products;
     const q = query.trim().toLowerCase();
@@ -63,6 +70,10 @@ function BrowsePageContent() {
     if (!deviceId) {
       toast.danger("Pick a machine first", { description: "Scan a QR code or choose one manually." });
       router.push("/shop");
+      return;
+    }
+    if (deviceInactive) {
+      toast.danger("Machine inactive", { description: "This machine isn't accepting orders right now." });
       return;
     }
     addItem(product, deviceId);
@@ -102,6 +113,15 @@ function BrowsePageContent() {
             </p>
           )}
         </div>
+
+        {deviceInactive && (
+          <div className="mb-6 flex w-full max-w-md items-start gap-2 rounded-2xl bg-error-container px-4 py-3 text-on-error-container">
+            <TriangleExclamation className="mt-0.5 h-4 w-4 shrink-0" />
+            <p className="font-body-md text-body-md">
+              This machine is currently inactive and isn't accepting orders.
+            </p>
+          </div>
+        )}
 
         {/* ── Search ─────────────────────────────────────────── */}
         <div className="mb-8 w-full max-w-md">

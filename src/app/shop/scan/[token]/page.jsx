@@ -42,6 +42,11 @@ export default function ScanResolverPage() {
           return;
         }
 
+        if (data.status !== "active") {
+          setError("This machine is currently inactive and isn't accepting orders.");
+          return;
+        }
+
         router.replace(`/shop/browse?device=${data._id}`);
       } catch (err) {
         console.log(err);

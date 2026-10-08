@@ -109,50 +109,56 @@ export default function ManageDevicesPage() {
             visibleDevices.map((device) => (
               <div
                 key={device._id}
-                className="flex items-center gap-4 rounded-2xl bg-surface-container-low p-4 shadow-[6px_6px_16px_rgba(184,196,214,0.5),-6px_-6px_16px_rgba(255,255,255,0.9)]"
+                className="flex flex-col gap-3 rounded-2xl bg-surface-container-low p-4 shadow-[6px_6px_16px_rgba(184,196,214,0.5),-6px_-6px_16px_rgba(255,255,255,0.9)] sm:flex-row sm:items-center sm:gap-4"
               >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface shadow-[inset_2px_2px_5px_rgba(184,196,214,0.5)]">
-                  <Server className="h-4 w-4 text-tertiary" />
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface shadow-[inset_2px_2px_5px_rgba(184,196,214,0.5)]">
+                    <Server className="h-4 w-4 text-tertiary" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-label-lg text-label-lg text-on-surface truncate">
+                      {device.name || "Not yet claimed"}
+                    </p>
+                    <p className="font-body-sm text-body-sm text-on-surface-variant truncate">
+                      {device.ownerId
+                        ? `Owned by ${ownerNameById[device.ownerId] || "Unknown"}`
+                        : "Unclaimed"}
+                      {device.slotCount ? ` · ${device.slotCount} slots` : ""}
+                    </p>
+                  </div>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="font-label-lg text-label-lg text-on-surface truncate">
-                    {device.name || "Not yet claimed"}
-                  </p>
-                  <p className="font-body-sm text-body-sm text-on-surface-variant truncate">
-                    {device.ownerId
-                      ? `Owned by ${ownerNameById[device.ownerId] || "Unknown"}`
-                      : "Unclaimed"}
-                    {device.slotCount ? ` · ${device.slotCount} slots` : ""}
-                  </p>
+                <div className="flex items-center justify-between gap-2 sm:justify-end">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span
+                      className={`flex items-center gap-1 rounded-full px-2.5 py-0.5 font-label-sm text-label-sm ${
+                        device.online
+                          ? "bg-primary-fixed text-on-primary-fixed-variant"
+                          : "bg-surface-container text-on-surface-variant"
+                      }`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${device.online ? "bg-primary" : "bg-outline"}`} />
+                      {device.online ? "Online" : "Offline"}
+                    </span>
+                    {device.status && (
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 font-label-sm text-label-sm ${
+                          device.status === "active"
+                            ? "bg-surface-container text-on-surface-variant"
+                            : "bg-error-container text-on-error-container"
+                        }`}
+                      >
+                        {device.status === "active" ? "Active" : "Inactive"}
+                      </span>
+                    )}
+                  </div>
+                  <Link
+                    href={`/admin/manage-devices/${device._id}`}
+                    className="flex shrink-0 items-center gap-1.5 rounded-full bg-primary-container px-4 py-2 font-label-md text-label-md text-on-primary hover:opacity-90 transition-opacity"
+                  >
+                    Manage
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </Link>
                 </div>
-                <span
-                    className={`flex items-center gap-1 rounded-full px-2.5 py-0.5 font-label-sm text-label-sm ${
-                      device.online
-                        ? "bg-primary-fixed text-on-primary-fixed-variant"
-                        : "bg-surface-container text-on-surface-variant"
-                    }`}
-                  >
-                    <span className={`h-1.5 w-1.5 rounded-full ${device.online ? "bg-primary" : "bg-outline"}`} />
-                    {device.online ? "Online" : "Offline"}
-                  </span>
-                {device.status && (
-                  <span
-                    className={`shrink-0 rounded-full px-2.5 py-0.5 font-label-sm text-label-sm ${
-                      device.status === "active"
-                        ? "bg-surface-container text-on-surface-variant"
-                        : "bg-error-container text-on-error-container"
-                    }`}
-                  >
-                    {device.status === "active" ? "Active" : "Inactive"}
-                  </span>
-                )}
-                <Link
-                  href={`/admin/manage-devices/${device._id}`}
-                  className="flex shrink-0 items-center gap-1.5 rounded-full bg-primary-container px-4 py-2 font-label-md text-label-md text-on-primary hover:opacity-90 transition-opacity"
-                >
-                  Manage
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </Link>
               </div>
             ))
           )}

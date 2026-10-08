@@ -395,6 +395,20 @@ export default function ManageDeviceDetailPage() {
 
             <div className="flex flex-col gap-3 mb-5">
               <div className="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
+                <span className="font-label-md text-label-md text-on-surface-variant">Connection</span>
+                <span
+                  className={`flex items-center gap-1 rounded-full px-2.5 py-0.5 font-label-sm text-label-sm ${
+                    device.online
+                      ? "bg-primary-fixed text-on-primary-fixed-variant"
+                      : "bg-surface-container text-on-surface-variant"
+                  }`}
+                >
+                  <span className={`h-1.5 w-1.5 rounded-full ${device.online ? "bg-primary" : "bg-outline"}`} />
+                  {device.online ? "Online" : "Offline"}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
                 <span className="font-label-md text-label-md text-on-surface-variant">Status</span>
                 {device.status ? (
                   <span
