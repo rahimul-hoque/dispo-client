@@ -17,9 +17,27 @@ async function forward(request, { params }) {
     // Route Handler), never in the browser, so this is a plain server-to-
     // server fetch — no CORS involved regardless of the deployed domains.
     const apiBase = process.env.EXPRESS_API_URL || "http://localhost:8000";
-    const res = await fetch(`${apiBase}/api/${path}${search}`, init);
-    const data = await res.json();
-    return Response.json(data, { status: res.status });
+    try {
+      const res = await fetch(`${apiBase}/api/${path}${search}`, init);
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        // Backend answered with something that isn't JSON (a platform
+        // error page, a crashed function) — surface what it was rather
+        // than throwing an empty 500.
+        console.error(`[proxy] non-JSON ${res.status} from ${path}:`, text.slice(0, 300));
+        return Response.json(
+          { error: "Backend returned an unexpected response", upstreamStatus: res.status },
+          { status: 502 }
+        );
+      }
+      return Response.json(data, { status: res.status });
+    } catch (error) {
+      console.error(`[proxy] request to ${path} failed:`, error);
+      return Response.json({ error: "Couldn't reach the backend" }, { status: 502 });
+    }
   }
   
   export { forward as GET, forward as POST, forward as PUT, forward as PATCH, forward as DELETE };
