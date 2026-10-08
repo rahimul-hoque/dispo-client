@@ -22,6 +22,8 @@ export default function ManageDevicesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("all"); // "all" | "mine"
+  const [connectionFilter, setConnectionFilter] = useState("all"); // "all" | "online" | "offline"
+  const [sortBy, setSortBy] = useState("default"); // "default" | "online-first"
 
   const ownerNameById = useMemo(
     () => Object.fromEntries(users.map((u) => [u._id, u.name || u.email])),
@@ -46,10 +48,27 @@ export default function ManageDevicesPage() {
       }
     };
     load();
+
+    // Quiet refresh (no skeleton) so "online right now" stays current.
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch("/api/proxy/devices");
+        const data = await res.json();
+        if (Array.isArray(data)) setDevices(data);
+      } catch {}
+    }, 15000);
+    return () => clearInterval(id);
   }, []);
 
+  const onlineCount = useMemo(
+    () => (Array.isArray(devices) ? devices.filter((d) => d.online).length : 0),
+    [devices]
+  );
+
   const visibleDevices = useMemo(() => {
-    let list = devices;
+    let list = Array.isArray(devices) ? devices : [];
+    if (connectionFilter === "online") list = list.filter((d) => d.online);
+    if (connectionFilter === "offline") list = list.filter((d) => !d.online);
     if (ownerFilter === "mine" && session?.user?.id) {
       list = list.filter((d) => d.ownerId === session.user.id);
     }
@@ -57,16 +76,25 @@ export default function ManageDevicesPage() {
       const q = query.trim().toLowerCase();
       list = list.filter((d) => d.name?.toLowerCase().includes(q));
     }
+    if (sortBy === "online-first") {
+      // Stable: online devices float to the top, original order kept within each group.
+      list = [...list].sort((a, b) => Number(!!b.online) - Number(!!a.online));
+    }
     return list;
-  }, [devices, ownerFilter, query, session]);
+  }, [devices, ownerFilter, connectionFilter, sortBy, query, session]);
 
   return (
     <main className="w-full min-h-screen py-10 px-6">
       <div className="mx-auto max-w-4xl">
         <h1 className="font-headline-lg text-headline-lg text-on-surface mb-1">Manage Devices</h1>
         <p className="font-body-md text-body-md text-on-surface-variant mb-8 max-w-lg">
-          Every device across every owner. Search by name, or narrow it down to devices you
-          personally own.
+          Every device across every owner. Search by name, narrow it down to devices you
+          personally own, or filter by who's online right now.
+          {!isLoading && (
+            <span className="ml-1 font-label-md text-label-md text-on-surface">
+              {onlineCount} of {devices.length} online.
+            </span>
+          )}
         </p>
 
         <div className="mb-6 flex flex-wrap items-center gap-3">
@@ -87,6 +115,25 @@ export default function ManageDevicesPage() {
           >
             <option value="all">All devices</option>
             <option value="mine">Only my devices</option>
+          </select>
+          <select
+            value={connectionFilter}
+            onChange={(e) => setConnectionFilter(e.target.value)}
+            aria-label="Filter by connection"
+            className="rounded-full bg-surface-container-low px-4 py-2.5 font-label-md text-label-md text-on-surface shadow-[3px_3px_8px_rgba(184,196,214,0.5)] focus:outline-none appearance-none cursor-pointer"
+          >
+            <option value="all">Any connection</option>
+            <option value="online">Online now</option>
+            <option value="offline">Offline</option>
+          </select>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            aria-label="Sort devices"
+            className="rounded-full bg-surface-container-low px-4 py-2.5 font-label-md text-label-md text-on-surface shadow-[3px_3px_8px_rgba(184,196,214,0.5)] focus:outline-none appearance-none cursor-pointer"
+          >
+            <option value="default">Default order</option>
+            <option value="online-first">Online first</option>
           </select>
         </div>
 
