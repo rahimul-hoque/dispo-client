@@ -125,6 +125,16 @@ export default function ManageDevicesPage() {
                     {device.slotCount ? ` · ${device.slotCount} slots` : ""}
                   </p>
                 </div>
+                <span
+                    className={`flex items-center gap-1 rounded-full px-2.5 py-0.5 font-label-sm text-label-sm ${
+                      device.online
+                        ? "bg-primary-fixed text-on-primary-fixed-variant"
+                        : "bg-surface-container text-on-surface-variant"
+                    }`}
+                  >
+                    <span className={`h-1.5 w-1.5 rounded-full ${device.online ? "bg-primary" : "bg-outline"}`} />
+                    {device.online ? "Online" : "Offline"}
+                  </span>
                 {device.status && (
                   <span
                     className={`shrink-0 rounded-full px-2.5 py-0.5 font-label-sm text-label-sm ${

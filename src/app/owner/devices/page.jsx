@@ -54,6 +54,15 @@ export default function DevicesPage() {
 
   useEffect(() => {
     fetchDevices();
+    // Quiet refresh so the Online/Offline badge stays current.
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch("/api/proxy/devices");
+        const data = await res.json();
+        if (Array.isArray(data)) setDevices(data);
+      } catch {}
+    }, 15000);
+    return () => clearInterval(id);
   }, []);
 
   const openEdit = (device) => {
@@ -237,6 +246,16 @@ export default function DevicesPage() {
                     }`}
                   >
                     {device.status === "active" ? "Active" : "Inactive"}
+                  </span>
+                  <span
+                    className={`flex items-center gap-1 rounded-full px-2.5 py-0.5 font-label-sm text-label-sm ${
+                      device.online
+                        ? "bg-primary-fixed text-on-primary-fixed-variant"
+                        : "bg-surface-container text-on-surface-variant"
+                    }`}
+                  >
+                    <span className={`h-1.5 w-1.5 rounded-full ${device.online ? "bg-primary" : "bg-outline"}`} />
+                    {device.online ? "Online" : "Offline"}
                   </span>
                   <span className="rounded-full bg-surface-container px-2.5 py-0.5 font-label-sm text-label-sm text-on-surface-variant">
                     {device.slotCount} slots
