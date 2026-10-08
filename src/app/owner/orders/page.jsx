@@ -15,6 +15,12 @@ function OrderRowSkeleton() {
   );
 }
 
+function formatDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const sec = Math.round(ms / 1000);
+  return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m ${sec % 60}s`;
+}
+
 export default function OwnerOrdersPage() {
   const { data: orders = [], isLoading: ordersLoading, mutate: mutateOrders } = useSWR("/api/proxy/orders", fetcher, {
     refreshInterval: 10000, // new orders and status changes arrive within 10s
@@ -22,6 +28,27 @@ export default function OwnerOrdersPage() {
   const { data: devices = [], isLoading: devicesLoading } = useSWR("/api/proxy/devices", fetcher);
   const isLoading = ordersLoading || devicesLoading;
   const [completingId, setCompletingId] = useState(null);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [deviceFilter, setDeviceFilter] = useState("all");
+
+  const counts = useMemo(() => {
+    const list = Array.isArray(orders) ? orders : [];
+    return {
+      completed: list.filter((o) => o.status === "completed").length,
+      failed: list.filter((o) => o.status === "failed").length,
+      active: list.filter((o) => o.status === "pending" || o.status === "dispensing").length,
+    };
+  }, [orders]);
+
+  const filtered = useMemo(
+    () =>
+      (Array.isArray(orders) ? orders : []).filter(
+        (o) =>
+          (statusFilter === "all" || o.status === statusFilter) &&
+          (deviceFilter === "all" || o.deviceId === deviceFilter)
+      ),
+    [orders, statusFilter, deviceFilter]
+  );
 
   const deviceNameById = useMemo(
     () => Object.fromEntries((Array.isArray(devices) ? devices : []).map((d) => [d._id, d.name])),
@@ -54,10 +81,47 @@ export default function OwnerOrdersPage() {
     <main className="w-full min-h-screen py-10 px-6">
       <div className="mx-auto max-w-3xl">
         <h1 className="font-headline-lg text-headline-lg text-on-surface mb-1">Orders</h1>
-        <p className="font-body-md text-body-md text-on-surface-variant mb-8 max-w-lg">
-          Every order starts pending. Once the machine actually dispenses the item, mark it
-          complete here \u2014 this is standing in for a real ESP32 confirmation, which isn't wired up yet.
+        <p className="font-body-md text-body-md text-on-surface-variant mb-6 max-w-lg">
+          Dispense history across your machines: what was ordered, how much actually came out,
+          how long it took, and why anything failed.
         </p>
+
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          {[
+            ["Completed", counts.completed],
+            ["Failed", counts.failed],
+            ["In progress", counts.active],
+          ].map(([label, n]) => (
+            <div key={label} className="rounded-2xl bg-surface-container-low px-4 py-3 text-center">
+              <p className="font-headline-sm text-headline-sm text-on-surface">{n}</p>
+              <p className="font-label-sm text-label-sm text-on-surface-variant">{label}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap gap-2 mb-6">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="rounded-full bg-surface-container-low px-4 py-2 font-label-md text-label-md text-on-surface"
+          >
+            <option value="all">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="dispensing">Dispensing</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+          </select>
+          <select
+            value={deviceFilter}
+            onChange={(e) => setDeviceFilter(e.target.value)}
+            className="rounded-full bg-surface-container-low px-4 py-2 font-label-md text-label-md text-on-surface"
+          >
+            <option value="all">All devices</option>
+            {(Array.isArray(devices) ? devices : []).map((d) => (
+              <option key={d._id} value={d._id}>{d.name}</option>
+            ))}
+          </select>
+        </div>
 
         <div className="flex flex-col gap-3">
           {isLoading ? (
@@ -66,16 +130,18 @@ export default function OwnerOrdersPage() {
               <OrderRowSkeleton />
               <OrderRowSkeleton />
             </>
-          ) : orders.length === 0 ? (
+          ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center rounded-[2rem] bg-surface-container-low py-16 px-6 text-center shadow-[inset_3px_3px_8px_rgba(184,196,214,0.4)]">
               <Receipt className="h-8 w-8 text-tertiary mb-3" />
               <p className="font-headline-sm text-headline-sm text-on-surface">No orders yet</p>
               <p className="font-body-md text-body-md text-on-surface-variant mt-1 max-w-xs">
-                Orders placed through /shop/checkout will show up here.
+                {orders.length === 0
+                  ? "Orders placed through /shop/checkout will show up here."
+                  : "No orders match these filters."}
               </p>
             </div>
           ) : (
-            orders.map((order) => (
+            filtered.map((order) => (
               <div
                 key={order._id}
                 className="rounded-2xl bg-surface-container-low p-4 shadow-[6px_6px_16px_rgba(184,196,214,0.5),-6px_-6px_16px_rgba(255,255,255,0.9)]"
@@ -121,10 +187,30 @@ export default function OwnerOrdersPage() {
                 <div className="flex flex-col gap-1 mb-3">
                   {(order.items || []).map((item, i) => (
                     <p key={i} className="font-body-sm text-body-sm text-on-surface">
-                      Slot {item.slotNumber} \u2014 {item.qty} \u00d7 {item.name}
+                      Slot {item.slotNumber} — {item.qty} × {item.name}
+                      {order.status !== "pending" && (
+                        <span className="text-on-surface-variant">
+                          {" "}
+                          · {item.dispensedQty || 0}/{item.qty} dispensed
+                        </span>
+                      )}
                     </p>
                   ))}
                 </div>
+
+                {order.status === "completed" && order.completedAt && (
+                  <p className="font-body-sm text-body-sm text-on-surface-variant mb-3">
+                    Completed {new Date(order.completedAt).toLocaleTimeString()} · took{" "}
+                    {formatDuration(new Date(order.completedAt) - new Date(order.createdAt))}
+                  </p>
+                )}
+                {order.status === "failed" && (
+                  <p className="font-body-sm text-body-sm text-error mb-3">
+                    {order.failureReason || "Failed"}
+                    {order.failedAt && ` · ${new Date(order.failedAt).toLocaleTimeString()}`}
+                    {order.stockRestored && " · stock restored"}
+                  </p>
+                )}
 
                 {order.status === "pending" && (
                   <button
