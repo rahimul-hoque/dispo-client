@@ -95,9 +95,11 @@ static const uint32_t MQTT_RETRY_MIN_MS = 5000;
 static const uint32_t MQTT_RETRY_MAX_MS = 30000;
 static uint32_t mqttRetryDelay = MQTT_RETRY_MIN_MS;
 
-// Upper bounds on any single blocking network call, so one slow attempt
-// can't stall the loop long enough to miss several heartbeats.
-static const uint16_t NET_TIMEOUT_S = 5;
+// Upper bounds on blocking network calls, so one slow attempt can't stall
+// the loop long enough to miss several heartbeats. The TLS handshake gets
+// more room than the HTTP poll: it's the slow part, and cutting it too
+// short made every MQTT reconnect fail.
+static const uint16_t TLS_HANDSHAKE_TIMEOUT_S = 10;
 static const uint16_t HTTP_TIMEOUT_MS = 4000;
 
 // ─── Relay State ─────────────────────────────────────────────────
@@ -458,8 +460,37 @@ static void notifyStatus(const String &msg) {
   txChar->notify();
 }
 
+// Bluetooth is only started when setup mode is first entered, not at boot.
+// The BLE stack holds a large chunk of RAM for as long as it's running,
+// which left too little for TLS: MQTT reconnects failed (rc=-2) at ~54KB
+// free heap. Normal operation never needs BLE.
+static bool bleStarted = false;
+static bool rebootToReleaseBle = false;
+
+static void startBle() {
+  if (bleStarted) return;
+  BLEDevice::init(DEVICE_NAME);
+  bleServer = BLEDevice::createServer();
+  bleServer->setCallbacks(new ServerCallbacks());
+  BLEService *svc = bleServer->createService(SVC_UUID);
+
+  BLECharacteristic *rx = svc->createCharacteristic(RX_UUID, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
+  rx->setCallbacks(new RxCallbacks());
+
+  txChar = svc->createCharacteristic(TX_UUID, BLECharacteristic::PROPERTY_NOTIFY);
+  txChar->addDescriptor(new BLE2902());
+  svc->start();
+  
+  BLEAdvertising *adv = BLEDevice::getAdvertising();
+  adv->addServiceUUID(SVC_UUID);
+  adv->setScanResponse(true);
+  bleStarted = true;
+  Serial.printf("[ble ] started (free heap now %u)\n", (unsigned)ESP.getFreeHeap());
+}
+
 static void enableSetupMode() {
   if (setupMode) return;
+  startBle();
   setupMode = true;
   setupStartTime = millis();
   BLEDevice::startAdvertising();
@@ -475,6 +506,12 @@ static void disableSetupMode() {
   }
   BLEDevice::getAdvertising()->stop();
   Serial.println("\n[mode] 🔴 SETUP MODE DISABLED (BLE stopped)");
+
+  // The BLE stack can't be cleanly shut down and restarted within one boot
+  // on the ESP32, so its memory is given back with a reboot instead (WiFi
+  // and the device ID are saved, so the board comes straight back). loop()
+  // waits until no order is running before doing it.
+  rebootToReleaseBle = true;
 }
 
 static void handleButtonAndTimeout() {
@@ -578,27 +615,10 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
   secureClient.setInsecure();
-  secureClient.setHandshakeTimeout(NET_TIMEOUT_S);
-  mqtt.setSocketTimeout(NET_TIMEOUT_S);
+  secureClient.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setCallback(mqttCallback);
   mqtt.setBufferSize(2048);
-
-  BLEDevice::init(DEVICE_NAME);
-  bleServer = BLEDevice::createServer();
-  bleServer->setCallbacks(new ServerCallbacks());
-  BLEService *svc = bleServer->createService(SVC_UUID);
-
-  BLECharacteristic *rx = svc->createCharacteristic(RX_UUID, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
-  rx->setCallbacks(new RxCallbacks());
-
-  txChar = svc->createCharacteristic(TX_UUID, BLECharacteristic::PROPERTY_NOTIFY);
-  txChar->addDescriptor(new BLE2902());
-  svc->start();
-  
-  BLEAdvertising *adv = BLEDevice::getAdvertising();
-  adv->addServiceUUID(SVC_UUID);
-  adv->setScanResponse(true);
 
   prefs.begin("wifi", true);
   String ssid = prefs.getString("ssid", "");
@@ -617,6 +637,7 @@ void setup() {
   Serial.printf("\n=========================================\n");
   Serial.printf("  Dispo Controller Active\n");
   Serial.printf("  Device Token: %s\n", g_deviceId.c_str());
+  Serial.printf("  Free heap: %u bytes\n", (unsigned)ESP.getFreeHeap());
   Serial.printf("=========================================\n");
 
   if (ssid.length()) {
@@ -629,6 +650,12 @@ void setup() {
 
 void loop() {
   handleButtonAndTimeout();
+
+  if (rebootToReleaseBle && !setupMode && !orderActive) {
+    Serial.println("[mode] rebooting to free Bluetooth memory");
+    delay(200);
+    ESP.restart();
+  }
 
   if (havePayload) {
     String text;
