@@ -81,7 +81,24 @@ static uint32_t mqttConnectedSince = 0;
 // real orders were published and never arrived). Rather than trust
 // PubSubClient to detect that, proactively force a fresh session on a
 // schedule so staleness is always bounded.
-static const uint32_t MQTT_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
+//
+// Was every 2 minutes. Each refresh is a blocking TLS reconnect, and while
+// it runs the 5s HTTP poll (which is also the board's online heartbeat)
+// can't, so the dashboard briefly showed the board as offline. The HTTP
+// poll now reliably delivers orders on its own, so a rarer refresh is
+// enough to bound MQTT staleness.
+static const uint32_t MQTT_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+
+// Failed MQTT connects back off (5s, 10s, 20s, capped at 30s) so a broker
+// that's slow or unreachable can't keep the loop busy reconnecting.
+static const uint32_t MQTT_RETRY_MIN_MS = 5000;
+static const uint32_t MQTT_RETRY_MAX_MS = 30000;
+static uint32_t mqttRetryDelay = MQTT_RETRY_MIN_MS;
+
+// Upper bounds on any single blocking network call, so one slow attempt
+// can't stall the loop long enough to miss several heartbeats.
+static const uint16_t NET_TIMEOUT_S = 5;
+static const uint16_t HTTP_TIMEOUT_MS = 4000;
 
 // ─── Relay State ─────────────────────────────────────────────────
 struct RelayState {
@@ -200,7 +217,7 @@ void mqttCallback(char* topic, byte* message, unsigned int length) {
 // ─── MQTT Connection & Topics ────────────────────────────────────
 void connectMQTT() {
   if (mqtt.connected() || g_deviceId == "unprovisioned" || WiFi.status() != WL_CONNECTED) return;
-  if (millis() - lastReconnectAttempt < 5000) return;
+  if (millis() - lastReconnectAttempt < mqttRetryDelay) return;
   lastReconnectAttempt = millis();
 
   Serial.printf("[mqtt] Connecting to HiveMQ Cloud as %s...\n", g_deviceId.c_str());
@@ -217,6 +234,7 @@ void connectMQTT() {
   if (mqtt.connect(g_deviceId.c_str(), MQTT_USER, MQTT_PASS, statusTopic.c_str(), 1, true, "offline", false)) {
     Serial.println("[mqtt] CONNECTED!");
     mqttConnectedSince = millis();
+    mqttRetryDelay = MQTT_RETRY_MIN_MS;
     mqtt.publish(statusTopic.c_str(), "online", true);
     mqtt.subscribe(cmdTopic.c_str(), 1);
     Serial.printf("[mqtt] Subscribed to %s\n", cmdTopic.c_str());
@@ -228,9 +246,10 @@ void connectMQTT() {
     // by the caller in loop()), so "connected" isn't the same as "good
     // enough for a TLS handshake."
     Serial.printf(
-      "[mqtt] connect failed, rc=%d, rssi=%d dBm, free heap=%u — retrying in 5s\n",
-      mqtt.state(), WiFi.RSSI(), (unsigned)ESP.getFreeHeap()
+      "[mqtt] connect failed, rc=%d, rssi=%d dBm, free heap=%u — retrying in %us\n",
+      mqtt.state(), WiFi.RSSI(), (unsigned)ESP.getFreeHeap(), (unsigned)(mqttRetryDelay / 1000)
     );
+    mqttRetryDelay = min(mqttRetryDelay * 2, MQTT_RETRY_MAX_MS);
   }
 }
 
@@ -240,6 +259,8 @@ static void pollPendingOrders() {
 
   HTTPClient http;
   String url = String(SERVER_BASE_URL) + "/api/devices/by-token/" + g_deviceId + "/pending-orders";
+  http.setConnectTimeout(HTTP_TIMEOUT_MS);
+  http.setTimeout(HTTP_TIMEOUT_MS);
   http.begin(url);
   int code = http.GET();
   if (code == 200) {
@@ -557,6 +578,8 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
   secureClient.setInsecure();
+  secureClient.setHandshakeTimeout(NET_TIMEOUT_S);
+  mqtt.setSocketTimeout(NET_TIMEOUT_S);
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setCallback(mqttCallback);
   mqtt.setBufferSize(2048);
@@ -621,6 +644,26 @@ void loop() {
   driveOrder();
   updateBoardState();
 
+  // Backup HTTP poller, run before any MQTT work: each poll is also the
+  // board's online heartbeat (the server marks the board offline after
+  // ~20s without one), so a slow MQTT reconnect must never delay it.
+  //
+  // Runs even while MQTT looks healthy — real-device
+  // testing found the server's publish silently failing in production for
+  // reasons not yet pinned down (works reliably in isolated testing, fails
+  // in the actual deployed environment), so for now this poll is the
+  // dependable path, not just a rare safety net. Same interval either way
+  // until the publish path's production reliability is actually
+  // confirmed. /pending-orders' claim is atomic server-side, so running
+  // this concurrently with an MQTT-triggered dispatch can't double-claim
+  // the same order — safe to poll this often.
+  static uint32_t lastPoll = 0;
+  uint32_t pollInterval = 5000;
+  if (!orderActive && WiFi.status() == WL_CONNECTED && millis() - lastPoll > pollInterval) {
+    lastPoll = millis();
+    pollPendingOrders();
+  }
+
   if (WiFi.status() == WL_CONNECTED) {
     if (!mqtt.connected()) {
       connectMQTT();
@@ -635,22 +678,6 @@ void loop() {
         mqtt.disconnect();
       }
     }
-  }
-
-  // Backup HTTP poller. Runs even while MQTT looks healthy — real-device
-  // testing found the server's publish silently failing in production for
-  // reasons not yet pinned down (works reliably in isolated testing, fails
-  // in the actual deployed environment), so for now this poll is the
-  // dependable path, not just a rare safety net. Same interval either way
-  // until the publish path's production reliability is actually
-  // confirmed. /pending-orders' claim is atomic server-side, so running
-  // this concurrently with an MQTT-triggered dispatch can't double-claim
-  // the same order — safe to poll this often.
-  static uint32_t lastPoll = 0;
-  uint32_t pollInterval = 5000;
-  if (!orderActive && WiFi.status() == WL_CONNECTED && millis() - lastPoll > pollInterval) {
-    lastPoll = millis();
-    pollPendingOrders();
   }
 
   static uint32_t lastTelemetry = 0;
