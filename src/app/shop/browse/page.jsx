@@ -6,9 +6,11 @@ import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import useSWR from "swr";
 import { fetcher } from "@/lib/fetcher";
-import { Box, Magnifier, ShoppingCart, Server, ArrowLeft, TriangleExclamation } from "@gravity-ui/icons";
+import { Box, Magnifier, ShoppingCart, Server, ArrowLeft } from "@gravity-ui/icons";
 import { toast } from "@heroui/react";
 import { useCart } from "@/lib/cart-context";
+import { useDeviceAvailability } from "@/lib/use-device-availability";
+import { DeviceUnavailableBanner, unavailableLabel } from "@/components/device-unavailable-banner";
 
 function ProductGridSkeleton() {
   return (
@@ -50,12 +52,7 @@ function BrowsePageContent() {
     return match ? match.name : null;
   }, [deviceId, publicDevices]);
 
-  // /devices/public only lists active machines, so once it has loaded a
-  // device that's missing from it has been deactivated by its owner/admin.
-  const deviceInactive = useMemo(
-    () => !!deviceId && Array.isArray(publicDevices) && !publicDevices.some((d) => d._id === deviceId),
-    [deviceId, publicDevices]
-  );
+  const { available, code: unavailableCode, message: unavailableMessage } = useDeviceAvailability(deviceId);
 
   const filteredProducts = useMemo(() => {
     if (!query.trim()) return products;
@@ -73,8 +70,8 @@ function BrowsePageContent() {
       router.push("/shop");
       return;
     }
-    if (deviceInactive) {
-      toast.danger("Machine inactive", { description: "This machine isn't accepting orders right now." });
+    if (!available) {
+      toast.danger(unavailableLabel(unavailableCode), { description: unavailableMessage });
       return;
     }
     addItem(product, deviceId);
@@ -115,13 +112,8 @@ function BrowsePageContent() {
           )}
         </div>
 
-        {deviceInactive && (
-          <div className="mb-6 flex w-full max-w-md items-start gap-2 rounded-2xl bg-error-container px-4 py-3 text-on-error-container">
-            <TriangleExclamation className="mt-0.5 h-4 w-4 shrink-0" />
-            <p className="font-body-md text-body-md">
-              This machine is currently inactive and isn't accepting orders.
-            </p>
-          </div>
+        {deviceId && !available && (
+          <DeviceUnavailableBanner code={unavailableCode} message={unavailableMessage} className="mb-6 w-full max-w-md" />
         )}
 
         {/* ── Search ─────────────────────────────────────────── */}
@@ -196,8 +188,9 @@ function BrowsePageContent() {
                     <button
                       type="button"
                       onClick={() => onAddToCart(product)}
-                      disabled={outOfStock}
+                      disabled={outOfStock || (!!deviceId && !available)}
                       aria-label={`Add ${product.name} to cart`}
+                      title={deviceId && !available ? unavailableLabel(unavailableCode) : undefined}
                       className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-container text-on-primary shadow-[3px_4px_10px_rgba(255,93,0,0.35)] transition-transform hover:scale-105 active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none disabled:bg-surface-container disabled:text-tertiary"
                     >
                       <ShoppingCart className="h-4 w-4" />

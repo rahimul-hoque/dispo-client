@@ -6,6 +6,8 @@ import useSWR from "swr";
 import { fetcher } from "@/lib/fetcher";
 import { useCart } from "@/lib/cart-context";
 import { toast, Spinner } from "@heroui/react";
+import { useDeviceAvailability } from "@/lib/use-device-availability";
+import { DeviceUnavailableBanner, unavailableLabel } from "@/components/device-unavailable-banner";
 import { CircleCheck, Hourglass, TriangleExclamation } from "@gravity-ui/icons";
 
 const STATUS_CONFIG = {
@@ -91,8 +93,12 @@ export default function CheckoutPage() {
   const { items, total, deviceId, clearCart } = useCart();
   const [isPlacing, setIsPlacing] = useState(false);
   const [confirmedOrder, setConfirmedOrder] = useState(null);
+  const { available, code: unavailableCode, message: unavailableMessage } = useDeviceAvailability(
+    items.length > 0 && !confirmedOrder ? deviceId : null
+  );
 
   const placeOrder = async () => {
+    if (!available) return;
     setIsPlacing(true);
     try {
       const res = await fetch("/api/proxy/orders", {
@@ -152,13 +158,17 @@ export default function CheckoutPage() {
         <span className="font-headline-lg text-headline-lg text-primary">৳{total}</span>
       </div>
 
+      {!available && (
+        <DeviceUnavailableBanner code={unavailableCode} message={unavailableMessage} className="mb-4" />
+      )}
+
       <button
         onClick={placeOrder}
-        disabled={isPlacing}
-        className="flex w-full items-center justify-center gap-2 rounded-full bg-primary-container px-5 py-3.5 font-label-lg text-label-lg text-on-primary disabled:opacity-70 cursor-pointer"
+        disabled={isPlacing || !available}
+        className="flex w-full items-center justify-center gap-2 rounded-full bg-primary-container px-5 py-3.5 font-label-lg text-label-lg text-on-primary disabled:opacity-70 disabled:cursor-not-allowed cursor-pointer"
       >
         {isPlacing && <Spinner size="sm" color="current" />}
-        {isPlacing ? "Placing order..." : "Place order"}
+        {isPlacing ? "Placing order..." : available ? "Place order" : unavailableLabel(unavailableCode)}
       </button>
     </main>
   );

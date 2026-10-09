@@ -8,6 +8,8 @@ import Link from "next/link";
 import { Box, ArrowLeft, ShoppingCart } from "@gravity-ui/icons";
 import { toast } from "@heroui/react";
 import { useCart } from "@/lib/cart-context";
+import { useDeviceAvailability } from "@/lib/use-device-availability";
+import { DeviceUnavailableBanner, unavailableLabel } from "@/components/device-unavailable-banner";
 
 export default function ProductDetailPage() {
   const { id } = useParams();
@@ -15,9 +17,10 @@ export default function ProductDetailPage() {
   const { data, isLoading } = useSWR(id ? `/api/proxy/products/${id}` : null, fetcher);
   const product = data && !data.error ? data : null;
   const { addItem } = useCart();
+  const { available, code: unavailableCode, message: unavailableMessage } = useDeviceAvailability(product?.deviceId);
 
   const onAddToCart = () => {
-    if (!product) return;
+    if (!product || !available) return;
     addItem(product, product.deviceId);
     toast.success("Added to cart", { description: product.name });
   };
@@ -93,15 +96,19 @@ export default function ProductDetailPage() {
             )}
           </div>
 
+          {!available && (
+            <DeviceUnavailableBanner code={unavailableCode} message={unavailableMessage} className="mt-6" />
+          )}
+
           <div className="mt-auto pt-6 flex items-center justify-between">
             <span className="font-headline-lg text-headline-lg text-primary">৳{product.price}</span>
             <button
               onClick={onAddToCart}
-              disabled={outOfStock}
+              disabled={outOfStock || !available}
               className="flex items-center gap-2 rounded-full bg-primary-container px-5 py-3 font-label-lg text-label-lg text-on-primary shadow-[4px_6px_14px_rgba(255,93,0,0.38)] transition-transform hover:scale-105 active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none disabled:bg-surface-container disabled:text-tertiary"
             >
               <ShoppingCart className="h-4 w-4" />
-              Add to cart
+              {available ? "Add to cart" : unavailableLabel(unavailableCode)}
             </button>
           </div>
         </div>

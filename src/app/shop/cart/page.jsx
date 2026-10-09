@@ -2,11 +2,16 @@
 
 import { useRouter } from "next/navigation";
 import { useCart } from "@/lib/cart-context";
+import { useDeviceAvailability } from "@/lib/use-device-availability";
+import { DeviceUnavailableBanner, unavailableLabel } from "@/components/device-unavailable-banner";
 import { TrashBin, Box, ArrowRight } from "@gravity-ui/icons";
 
 export default function CartPage() {
   const router = useRouter();
-  const { items, updateQty, removeItem, total } = useCart();
+  const { items, updateQty, removeItem, total, deviceId } = useCart();
+  const { available, code: unavailableCode, message: unavailableMessage } = useDeviceAvailability(
+    items.length > 0 ? deviceId : null
+  );
 
   if (items.length === 0) {
     return (
@@ -68,11 +73,18 @@ export default function CartPage() {
         <span className="font-headline-lg text-headline-lg text-primary">৳{total}</span>
       </div>
 
+      {!available && (
+        <DeviceUnavailableBanner code={unavailableCode} message={unavailableMessage} className="mb-4" />
+      )}
+
       <button
         onClick={() => router.push("/shop/checkout")}
-        className="group flex w-full items-center justify-between rounded-full bg-surface p-2 pl-6 shadow-[6px_6px_14px_rgba(184,196,214,0.6),-6px_-6px_14px_rgba(255,255,255,0.95)] hover:shadow-[8px_8px_18px_rgba(184,196,214,0.7),-8px_-8px_18px_rgba(255,255,255,1)] transition-all cursor-pointer"
+        disabled={!available}
+        className="disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none group flex w-full items-center justify-between rounded-full bg-surface p-2 pl-6 shadow-[6px_6px_14px_rgba(184,196,214,0.6),-6px_-6px_14px_rgba(255,255,255,0.95)] hover:shadow-[8px_8px_18px_rgba(184,196,214,0.7),-8px_-8px_18px_rgba(255,255,255,1)] transition-all cursor-pointer"
       >
-        <span className="font-headline-sm text-headline-sm font-bold text-on-surface">Checkout</span>
+        <span className="font-headline-sm text-headline-sm font-bold text-on-surface">
+          {available ? "Checkout" : unavailableLabel(unavailableCode)}
+        </span>
         <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary-container text-on-primary shadow-[4px_6px_14px_rgba(255,93,0,0.38),-2px_-2px_6px_rgba(255,140,75,0.4)] transition-transform group-hover:scale-105 group-active:scale-95">
           <ArrowRight className="h-5 w-5" />
         </div>
