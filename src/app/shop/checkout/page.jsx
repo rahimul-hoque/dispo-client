@@ -11,7 +11,9 @@ import { DeviceUnavailableBanner, unavailableLabel } from "@/components/device-u
 import { CircleCheck, Hourglass, TriangleExclamation } from "@gravity-ui/icons";
 
 const STATUS_CONFIG = {
-  pending: { icon: Hourglass, label: "You're in queue!", color: "text-on-surface-variant", spin: true },
+  // Orders stay pending until the machine claims them: a moment when it's
+  // free, longer if another order is still dispensing ahead of this one.
+  pending: { icon: Hourglass, label: "Waiting for the machine…", color: "text-on-surface-variant", spin: true },
   dispensing: { icon: Spinner, label: "Dispensing your order…", color: "text-primary", spin: true },
   completed: { icon: CircleCheck, label: "Order complete!", color: "text-primary", spin: false },
   failed: { icon: TriangleExclamation, label: "Something went wrong", color: "text-error", spin: false },

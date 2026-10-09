@@ -116,6 +116,9 @@ struct OrderItem {
   uint8_t qty;
 };
 static bool orderActive = false;
+// Set by an MQTT wake-up or when an order finishes: poll for the next
+// pending order right away instead of waiting for the 5s interval.
+static volatile bool pollNow = false;
 static String orderId = "";
 static OrderItem orderItems[MAX_SLOTS];
 static uint8_t orderItemCount = 0;
@@ -209,11 +212,19 @@ static void updateBoardState() {
   }
 }
 
+// MQTT only ever says "check now". Orders themselves are always claimed
+// through the HTTP poll, which marks them dispensing atomically on the
+// server, so an order is never "dispensing" unless this board has it.
+// Anything else (e.g. an old "dispense" message still queued in the
+// persistent session) is ignored rather than acted on.
 void mqttCallback(char* topic, byte* message, unsigned int length) {
-  String json = "";
-  for (unsigned int i = 0; i < length; i++) json += (char)message[i];
-  Serial.printf("[mqtt] push arrived on %s\n", topic);
-  handleIncomingOrder(json);
+  String t = String(topic);
+  if (t.endsWith("/wake")) {
+    Serial.println("[mqtt] wake-up — polling for orders now");
+    pollNow = true;
+  } else {
+    Serial.printf("[mqtt] ignoring message on %s\n", topic);
+  }
 }
 
 // ─── MQTT Connection & Topics ────────────────────────────────────
@@ -225,7 +236,8 @@ void connectMQTT() {
   Serial.printf("[mqtt] Connecting to HiveMQ Cloud as %s...\n", g_deviceId.c_str());
 
   String statusTopic = "devices/" + g_deviceId + "/status";
-  String cmdTopic    = "devices/" + g_deviceId + "/dispense";
+  String wakeTopic   = "devices/" + g_deviceId + "/wake";
+  String oldCmdTopic = "devices/" + g_deviceId + "/dispense";
 
   // Connect with Last Will & Testament (LWT). cleanSession=false so the
   // broker keeps our subscription + queues any QoS-1 messages published
@@ -238,8 +250,9 @@ void connectMQTT() {
     mqttConnectedSince = millis();
     mqttRetryDelay = MQTT_RETRY_MIN_MS;
     mqtt.publish(statusTopic.c_str(), "online", true);
-    mqtt.subscribe(cmdTopic.c_str(), 1);
-    Serial.printf("[mqtt] Subscribed to %s\n", cmdTopic.c_str());
+    mqtt.unsubscribe(oldCmdTopic.c_str()); // drop the pre-wake subscription from the persistent session
+    mqtt.subscribe(wakeTopic.c_str(), 1);
+    Serial.printf("[mqtt] Subscribed to %s\n", wakeTopic.c_str());
   } else {
     // rc alone doesn't say WHY the transport failed — RSSI/heap here so a
     // weak-signal or memory-fragmentation cause is visible instead of
@@ -255,7 +268,7 @@ void connectMQTT() {
   }
 }
 
-// ─── HTTP Polling Backup (Guarantees orders are never missed) ─────
+// ─── HTTP Polling (how orders reach the board) ───────────────────
 static void pollPendingOrders() {
   if (orderActive || WiFi.status() != WL_CONNECTED || g_deviceId == "unprovisioned") return;
 
@@ -275,39 +288,48 @@ static void pollPendingOrders() {
   http.end();
 }
 
-// ─── Order Reporting (MQTT only) ──────────────────────────────────
-// Used to also fire an equivalent HTTP PATCH alongside every MQTT publish
-// "just in case MQTT was asleep." Dropped that: it was two independent
-// implementations of the same event (exactly the kind of duplication that
-// let the MQTT "complete" handler drift out of sync with the HTTP route's
-// guards server-side before), for no real benefit — if the board's MQTT
-// session is down, the HTTP calls would've needed their own WiFi/network
-// path anyway, and the 5-minute stale-order sweep already exists precisely
-// to recover from a board that can't report in at all.
-static void completeOrder(const String &id) {
-  if (mqtt.connected()) {
-    String topic = "devices/" + g_deviceId + "/complete";
-    String body = "{\"orderId\":\"" + id + "\"}";
-    mqtt.publish(topic.c_str(), body.c_str()); // not retained — this is a one-off event, not device state
+// ─── Order Reporting (HTTP) ──────────────────────────────────────
+// Reported over HTTP, not MQTT: the server runs on Vercel, where nothing
+// is reliably listening for MQTT between requests, so "complete" messages
+// sat unread until the order had already timed out. An HTTP request is
+// handled the moment it arrives. Retried a few times; the server routes
+// are idempotent, so a retry after a lost response is harmless.
+static bool reportToServer(const String &path, const String &body) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  String url = String(SERVER_BASE_URL) + "/api/devices/by-token/" + g_deviceId + path;
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    HTTPClient http;
+    http.setConnectTimeout(HTTP_TIMEOUT_MS);
+    http.setTimeout(HTTP_TIMEOUT_MS);
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    int code = http.PATCH(body);
+    http.end();
+    if (code >= 200 && code < 300) return true;
+    if (code >= 400 && code < 500) {
+      // The server understood and refused (e.g. order already resolved) —
+      // retrying won't change that.
+      Serial.printf("[http] %s rejected (%d)\n", path.c_str(), code);
+      return false;
+    }
+    Serial.printf("[http] %s failed (%d), attempt %d/3\n", path.c_str(), code, attempt);
+    delay(300 * attempt);
   }
-  Serial.printf("[ordr] Order %s complete reported to cloud\n", id.c_str());
+  return false;
+}
+
+static void completeOrder(const String &id) {
+  bool ok = reportToServer("/orders/" + id + "/complete", "{}");
+  Serial.printf("[ordr] Order %s complete %s\n", id.c_str(), ok ? "reported to cloud" : "NOT confirmed by cloud");
 }
 
 static void reportProgress(const String &id, uint8_t slotNumber) {
-  if (mqtt.connected()) {
-    String topic = "devices/" + g_deviceId + "/progress";
-    String body = "{\"orderId\":\"" + id + "\",\"slotNumber\":" + String(slotNumber) + "}";
-    mqtt.publish(topic.c_str(), body.c_str());
-  }
+  reportToServer("/orders/" + id + "/items/" + String(slotNumber) + "/progress", "{}");
 }
 
 static void failOrder(const String &id, const String &reason) {
-  if (mqtt.connected()) {
-    String topic = "devices/" + g_deviceId + "/fail";
-    String body = "{\"orderId\":\"" + id + "\",\"reason\":\"" + reason + "\"}";
-    mqtt.publish(topic.c_str(), body.c_str()); // not retained, same reasoning as completeOrder
-  }
-  Serial.printf("[ordr] Order %s failed reported: %s\n", id.c_str(), reason.c_str());
+  bool ok = reportToServer("/orders/" + id + "/fail", "{\"reason\":\"" + reason + "\"}");
+  Serial.printf("[ordr] Order %s failed (%s) %s\n", id.c_str(), reason.c_str(), ok ? "reported" : "NOT confirmed");
 }
 
 static void sendTelemetry() {
@@ -335,6 +357,7 @@ static void driveOrder() {
     Serial.printf("[ordr] Order %s timed out — reporting failure\n", orderId.c_str());
     failOrder(orderId, "device_timeout");
     orderActive = false;
+    pollNow = true;
     lastActivityAt = millis(); // idle countdown starts from when this actually ended, not when it started
     return;
   }
@@ -366,6 +389,7 @@ static void advanceOrderProgress() {
   Serial.printf("[ordr] order %s fully dispensed!\n", orderId.c_str());
   completeOrder(orderId);
   orderActive = false;
+  pollNow = true; // pick up the next queued order straight away
   lastActivityAt = millis(); // idle countdown starts from when this actually ended, not when it started
 }
 
@@ -671,22 +695,15 @@ void loop() {
   driveOrder();
   updateBoardState();
 
-  // Backup HTTP poller, run before any MQTT work: each poll is also the
-  // board's online heartbeat (the server marks the board offline after
-  // ~20s without one), so a slow MQTT reconnect must never delay it.
-  //
-  // Runs even while MQTT looks healthy — real-device
-  // testing found the server's publish silently failing in production for
-  // reasons not yet pinned down (works reliably in isolated testing, fails
-  // in the actual deployed environment), so for now this poll is the
-  // dependable path, not just a rare safety net. Same interval either way
-  // until the publish path's production reliability is actually
-  // confirmed. /pending-orders' claim is atomic server-side, so running
-  // this concurrently with an MQTT-triggered dispatch can't double-claim
-  // the same order — safe to poll this often.
+  // HTTP poll: the only way this board receives orders (it claims the
+  // oldest pending order atomically on the server), and also its online
+  // heartbeat. Runs every 5s, or immediately after an MQTT wake-up or a
+  // finished order. Runs before any MQTT work so a slow reconnect can
+  // never delay it.
   static uint32_t lastPoll = 0;
   uint32_t pollInterval = 5000;
-  if (!orderActive && WiFi.status() == WL_CONNECTED && millis() - lastPoll > pollInterval) {
+  if (!orderActive && WiFi.status() == WL_CONNECTED && (pollNow || millis() - lastPoll > pollInterval)) {
+    pollNow = false;
     lastPoll = millis();
     pollPendingOrders();
   }
