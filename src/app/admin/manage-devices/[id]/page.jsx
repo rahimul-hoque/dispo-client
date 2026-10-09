@@ -146,6 +146,20 @@ export default function ManageDeviceDetailPage() {
     load();
   }, [id]);
 
+  // Quiet refresh of just the device so the Connection badge stays live.
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      if (document.hidden) return;
+      try {
+        const res = await fetch("/api/proxy/devices");
+        const devices = await res.json();
+        const fresh = Array.isArray(devices) ? devices.find((d) => d._id === id) : null;
+        if (fresh) setDevice((prev) => (prev ? { ...prev, online: fresh.online, lastSeen: fresh.lastSeen } : prev));
+      } catch {}
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [id]);
+
   useEffect(() => {
     setIsBleSupported(isBluetoothSupported());
   }, []);

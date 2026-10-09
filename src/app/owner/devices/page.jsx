@@ -56,12 +56,13 @@ export default function DevicesPage() {
     fetchDevices();
     // Quiet refresh so the Online/Offline badge stays current.
     const id = setInterval(async () => {
+      if (document.hidden) return; // don't poll from a background tab
       try {
         const res = await fetch("/api/proxy/devices");
         const data = await res.json();
         if (Array.isArray(data)) setDevices(data);
       } catch {}
-    }, 15000);
+    }, 5000);
     return () => clearInterval(id);
   }, []);
 
