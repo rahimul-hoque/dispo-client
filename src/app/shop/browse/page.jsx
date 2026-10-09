@@ -1,5 +1,6 @@
 "use client";
 
+import { productImageUrl } from "@/lib/product-image";
 import { useMemo, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -163,8 +164,8 @@ function BrowsePageContent() {
                 >
                   <Link href={`/shop/product/${product._id}`} className="block">
                     <div className="relative mb-3 flex aspect-square w-full items-center justify-center overflow-hidden rounded-2xl bg-surface shadow-[inset_2px_2px_5px_rgba(184,196,214,0.5),inset_-2px_-2px_5px_rgba(255,255,255,0.9)]">
-                      {product.image ? (
-                        <img src={product.image} alt={product.name} className="h-full w-full object-cover" />
+                      {productImageUrl(product) ? (
+                        <img src={productImageUrl(product)} alt={product.name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                       ) : (
                         <Box className="h-8 w-8 text-tertiary" />
                       )}

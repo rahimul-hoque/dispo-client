@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useSWRList } from "@/lib/use-swr-list";
 import { Persons, PersonGear, TrashBin, TriangleExclamation } from "@gravity-ui/icons";
 import { Modal, toast, useOverlayState, Spinner } from "@heroui/react";
 
@@ -20,31 +21,14 @@ function UserRowSkeleton() {
 }
 
 export default function AdminUsersPage() {
-  const [users, setUsers] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const { list: users, setList: setUsers, isLoading } = useSWRList("/api/proxy/users", {
+    onError: () => toast.danger("Couldn't load users", { description: "Check your connection and try again." }),
+  });
   const [updatingId, setUpdatingId] = useState(null);
 
   const deleteModal = useOverlayState();
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
-
-  const fetchUsers = async () => {
-    setIsLoading(true);
-    try {
-      const res = await fetch("/api/proxy/users");
-      const data = await res.json();
-      setUsers(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.log(error);
-      toast.danger("Couldn't load users", { description: "Check your connection and try again." });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchUsers();
-  }, []);
 
   const changeRole = async (user, newRole) => {
     if (newRole === user.role) return;

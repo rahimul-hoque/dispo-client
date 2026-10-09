@@ -1,7 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Receipt, Server, CircleCheck, Hourglass } from "@gravity-ui/icons";
+import { useMemo, useState } from "react";
+import useSWR from "swr";
+import { fetcher } from "@/lib/fetcher";
+import { usePaginatedOrders } from "@/lib/use-orders";
+import { LoadMoreButton } from "@/components/load-more-button";
+import { Receipt, Server, CircleCheck, Hourglass, TriangleExclamation } from "@gravity-ui/icons";
 import { toast, Spinner } from "@heroui/react";
 
 function OrderRowSkeleton() {
@@ -14,10 +18,13 @@ function OrderRowSkeleton() {
 }
 
 export default function AdminOrdersPage() {
-  const [orders, setOrders] = useState([]);
-  const [devices, setDevices] = useState([]);
-  const [users, setUsers] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const { orders, isLoading: ordersLoading, hasMore, isLoadingMore, loadMore, updateOrder } =
+    usePaginatedOrders({ refreshInterval: 10000 });
+  const { data: devicesData, isLoading: devicesLoading } = useSWR("/api/proxy/devices", fetcher);
+  const { data: usersData, isLoading: usersLoading } = useSWR("/api/proxy/users", fetcher);
+  const devices = useMemo(() => (Array.isArray(devicesData) ? devicesData : []), [devicesData]);
+  const users = useMemo(() => (Array.isArray(usersData) ? usersData : []), [usersData]);
+  const isLoading = ordersLoading || devicesLoading || usersLoading;
   const [completingId, setCompletingId] = useState(null);
 
   const deviceNameById = useMemo(
@@ -33,29 +40,6 @@ export default function AdminOrdersPage() {
     [users]
   );
 
-  const load = async () => {
-    setIsLoading(true);
-    try {
-      const [ordersRes, devicesRes, usersRes] = await Promise.all([
-        fetch("/api/proxy/orders"),
-        fetch("/api/proxy/devices"),
-        fetch("/api/proxy/users"),
-      ]);
-      setOrders(await ordersRes.json());
-      setDevices(await devicesRes.json());
-      setUsers(await usersRes.json());
-    } catch (error) {
-      console.log(error);
-      toast.danger("Couldn't load orders", { description: "Check your connection and try again." });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
-
   const markComplete = async (order) => {
     setCompletingId(order._id);
     try {
@@ -65,9 +49,7 @@ export default function AdminOrdersPage() {
         toast.danger("Couldn't complete order", { description: result.error || "Please try again." });
         return;
       }
-      setOrders((prev) =>
-        prev.map((o) => (o._id === order._id ? { ...o, status: "completed" } : o))
-      );
+      updateOrder(order._id, { status: "completed" });
       toast.success("Order marked as dispensed");
     } catch (error) {
       console.log(error);
@@ -82,9 +64,7 @@ export default function AdminOrdersPage() {
       <div className="mx-auto max-w-3xl">
         <h1 className="font-headline-lg text-headline-lg text-on-surface mb-1">Orders</h1>
         <p className="font-body-md text-body-md text-on-surface-variant mb-8 max-w-lg">
-          Every order across every owner and every device, system-wide. Every order starts
-          pending — mark it complete here once the machine actually dispenses (standing in for a
-          real ESP32 confirmation, which isn't wired up yet).
+          Every order across every owner and every device, system-wide, newest first.
         </p>
 
         <div className="flex flex-col gap-3">
@@ -125,6 +105,16 @@ export default function AdminOrdersPage() {
                         <CircleCheck className="h-3 w-3" />
                         Completed
                       </span>
+                    ) : order.status === "dispensing" ? (
+                      <span className="flex items-center gap-1 rounded-full bg-primary-container px-2.5 py-0.5 font-label-sm text-label-sm text-on-primary">
+                        <Spinner size="sm" color="current" />
+                        Dispensing
+                      </span>
+                    ) : order.status === "failed" ? (
+                      <span className="flex items-center gap-1 rounded-full bg-error-container px-2.5 py-0.5 font-label-sm text-label-sm text-on-error-container">
+                        <TriangleExclamation className="h-3 w-3" />
+                        Failed
+                      </span>
                     ) : (
                       <span className="flex items-center gap-1 rounded-full bg-surface-container px-2.5 py-0.5 font-label-sm text-label-sm text-on-surface-variant">
                         <Hourglass className="h-3 w-3" />
@@ -160,6 +150,7 @@ export default function AdminOrdersPage() {
               </div>
             ))
           )}
+          {!isLoading && <LoadMoreButton hasMore={hasMore} isLoadingMore={isLoadingMore} onClick={loadMore} />}
         </div>
       </div>
     </main>

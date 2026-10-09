@@ -1,6 +1,8 @@
 "use client";
 
+import { productImageUrl } from "@/lib/product-image";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSWRList } from "@/lib/use-swr-list";
 import { useParams, useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { QRCodeSVG } from "qrcode.react";
@@ -34,10 +36,31 @@ const DEVICE_TYPE_LABELS = {
 export default function ManageDeviceDetailPage() {
   const { id } = useParams();
   const router = useRouter();
-  const [device, setDevice] = useState(null);
-  const [ownerName, setOwnerName] = useState(null);
-  const [products, setProducts] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const onLoadError = () =>
+    toast.danger("Couldn't load device", { description: "Check your connection and try again." });
+  // Device list refreshes every 5s so the Connection badge stays live.
+  const { list: devices, setList: setDevices, isLoading: devicesLoading } = useSWRList("/api/proxy/devices", {
+    refreshInterval: 5000,
+    onError: onLoadError,
+  });
+  const { list: users, isLoading: usersLoading } = useSWRList("/api/proxy/users", { onError: onLoadError });
+  const { list: products, setList: setProducts, isLoading: productsLoading } = useSWRList(
+    id ? `/api/proxy/products?deviceId=${id}` : null,
+    { onError: onLoadError }
+  );
+  const isLoading = devicesLoading || usersLoading || productsLoading;
+
+  const device = useMemo(() => devices.find((d) => d._id === id) || null, [devices, id]);
+  const ownerName = useMemo(() => {
+    if (!device?.ownerId) return null;
+    const owner = users.find((u) => u._id === device.ownerId);
+    return owner?.name || owner?.email || "Unknown";
+  }, [device, users]);
+  // Local edits to this device, applied to its entry in the cached list.
+  const setDevice = (update) =>
+    setDevices((prev) =>
+      prev.map((d) => (d._id === id ? (typeof update === "function" ? update(d) : { ...d, ...update }) : d))
+    );
 
   const editModal = useOverlayState();
   const editForm = useForm({ defaultValues: { name: "", slotCount: "", status: "active" } });
@@ -116,49 +139,6 @@ export default function ManageDeviceDetailPage() {
       toast.danger("Couldn't add product", { description: "Something went wrong." });
     }
   };
-
-  const load = async () => {
-    setIsLoading(true);
-    try {
-      const [devicesRes, usersRes, productsRes] = await Promise.all([
-        fetch("/api/proxy/devices"),
-        fetch("/api/proxy/users"),
-        fetch(`/api/proxy/products?deviceId=${id}`),
-      ]);
-      const devices = await devicesRes.json();
-      const users = await usersRes.json();
-      const foundDevice = Array.isArray(devices) ? devices.find((d) => d._id === id) : null;
-      setDevice(foundDevice || null);
-      if (foundDevice?.ownerId) {
-        const owner = users.find((u) => u._id === foundDevice.ownerId);
-        setOwnerName(owner?.name || owner?.email || "Unknown");
-      }
-      setProducts(await productsRes.json());
-    } catch (error) {
-      console.log(error);
-      toast.danger("Couldn't load device", { description: "Check your connection and try again." });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    load();
-  }, [id]);
-
-  // Quiet refresh of just the device so the Connection badge stays live.
-  useEffect(() => {
-    const timer = setInterval(async () => {
-      if (document.hidden) return;
-      try {
-        const res = await fetch("/api/proxy/devices");
-        const devices = await res.json();
-        const fresh = Array.isArray(devices) ? devices.find((d) => d._id === id) : null;
-        if (fresh) setDevice((prev) => (prev ? { ...prev, online: fresh.online, lastSeen: fresh.lastSeen } : prev));
-      } catch {}
-    }, 5000);
-    return () => clearInterval(timer);
-  }, [id]);
 
   useEffect(() => {
     setIsBleSupported(isBluetoothSupported());
@@ -719,8 +699,8 @@ export default function ManageDeviceDetailPage() {
                     className="rounded-2xl bg-surface-container-low p-3 shadow-[6px_6px_16px_rgba(184,196,214,0.5),-6px_-6px_16px_rgba(255,255,255,0.9)]"
                   >
                     <div className="mb-2 flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl bg-surface">
-                      {product.image ? (
-                        <img src={product.image} alt={product.name} className="h-full w-full object-cover" />
+                      {productImageUrl(product) ? (
+                        <img src={productImageUrl(product)} alt={product.name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                       ) : (
                         <Box className="h-6 w-6 text-tertiary" />
                       )}

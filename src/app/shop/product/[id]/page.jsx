@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { productImageUrl } from "@/lib/product-image";
+import useSWR from "swr";
+import { fetcher } from "@/lib/fetcher";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Box, ArrowLeft, ShoppingCart } from "@gravity-ui/icons";
@@ -10,17 +12,9 @@ import { useCart } from "@/lib/cart-context";
 export default function ProductDetailPage() {
   const { id } = useParams();
   const router = useRouter();
-  const [product, setProduct] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const { data, isLoading } = useSWR(id ? `/api/proxy/products/${id}` : null, fetcher);
+  const product = data && !data.error ? data : null;
   const { addItem } = useCart();
-
-  useEffect(() => {
-    fetch(`/api/proxy/products/${id}`)
-      .then((res) => res.json())
-      .then((data) => setProduct(data && !data.error ? data : null))
-      .catch((error) => console.log(error))
-      .finally(() => setIsLoading(false));
-  }, [id]);
 
   const onAddToCart = () => {
     if (!product) return;
@@ -70,8 +64,8 @@ export default function ProductDetailPage() {
 
       <div className="grid grid-cols-1 gap-8 sm:grid-cols-2">
         <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-[2rem] bg-surface-container-low shadow-[inset_3px_3px_8px_rgba(184,196,214,0.4)]">
-          {product.image ? (
-            <img src={product.image} alt={product.name} className="h-full w-full object-cover" />
+          {productImageUrl(product) ? (
+            <img src={productImageUrl(product)} alt={product.name} decoding="async" className="h-full w-full object-cover" />
           ) : (
             <Box className="h-16 w-16 text-tertiary" />
           )}

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useSWRList } from "@/lib/use-swr-list";
 import { useRouter } from "next/navigation";
 import { Scanner } from "@yudiel/react-qr-scanner";
 import { Server, QrCode } from "@gravity-ui/icons";
@@ -10,16 +11,11 @@ export default function ShopEntryPage() {
   const router = useRouter();
   const [mode, setMode] = useState("scan"); // "scan" | "manual"
   const [isScanning, setIsScanning] = useState(false);
-  const [devices, setDevices] = useState([]);
+  // Same cache key as the browse page, so the list is often already loaded.
+  const { list: devices } = useSWRList(mode === "manual" ? "/api/proxy/devices/public" : null, {
+    onError: () => toast.danger("Couldn't load the device list"),
+  });
   const [selected, setSelected] = useState("");
-
-  useEffect(() => {
-    if (mode !== "manual") return;
-    fetch("/api/proxy/devices/public")
-      .then((res) => res.json())
-      .then((data) => setDevices(Array.isArray(data) ? data : []))
-      .catch(() => toast.danger("Couldn't load the device list"));
-  }, [mode]);
 
   // The QR now encodes just the raw device token (not a full URL), so a
   // scan just needs the path attached before navigating — same behavior

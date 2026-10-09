@@ -53,15 +53,19 @@ function EmptyChartState({ icon: Icon, message }) {
 export default function AdminDashboardPage() {
   const { data: users = [], isLoading: usersLoading } = useSWR("/api/proxy/users", fetcher, { refreshInterval: 30000 });
   const { data: devices = [], isLoading: devicesLoading } = useSWR("/api/proxy/devices", fetcher, { refreshInterval: 30000 });
-  const { data: products = [], isLoading: productsLoading } = useSWR("/api/proxy/products?noImages=true", fetcher, { refreshInterval: 30000 });
-  const { data: orders = [], isLoading: ordersLoading } = useSWR("/api/proxy/orders", fetcher, { refreshInterval: 15000 });
+  const { data: products = [], isLoading: productsLoading } = useSWR("/api/proxy/products", fetcher, { refreshInterval: 30000 });
+  // Revenue/top-seller numbers are computed server-side — fetching every
+  // order just to sum them got slower with every sale.
+  const tz = typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC";
+  const { data: stats, isLoading: ordersLoading } = useSWR(
+    `/api/proxy/orders/stats?tz=${encodeURIComponent(tz)}`,
+    fetcher,
+    { refreshInterval: 15000 }
+  );
 
   const loading = usersLoading || devicesLoading || productsLoading || ordersLoading;
 
-  const totalRevenue = useMemo(
-    () => (Array.isArray(orders) ? orders.reduce((sum, o) => sum + (o.total || 0), 0) : 0),
-    [orders]
-  );
+  const totalRevenue = stats?.totalRevenue || 0;
 
   const usersByRole = useMemo(() => {
     if (!Array.isArray(users)) return [];
@@ -84,31 +88,9 @@ export default function AdminDashboardPage() {
     return Object.entries(counts).map(([name, count]) => ({ name, count }));
   }, [devices, users]);
 
-  const revenueOverTime = useMemo(() => {
-    if (!Array.isArray(orders)) return [];
-    const byDay = {};
-    orders.forEach((o) => {
-      const day = new Date(o.createdAt).toLocaleDateString("en-CA");
-      byDay[day] = (byDay[day] || 0) + (o.total || 0);
-    });
-    return Object.entries(byDay)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([day, revenue]) => ({ day, revenue }));
-  }, [orders]);
+  const revenueOverTime = Array.isArray(stats?.revenueByDay) ? stats.revenueByDay : [];
 
-  const topSelling = useMemo(() => {
-    if (!Array.isArray(orders)) return [];
-    const soldByName = {};
-    orders.forEach((o) => {
-      (o.items || []).forEach((item) => {
-        soldByName[item.name] = (soldByName[item.name] || 0) + item.qty;
-      });
-    });
-    return Object.entries(soldByName)
-      .map(([name, qty]) => ({ name, qty }))
-      .sort((a, b) => b.qty - a.qty)
-      .slice(0, 8);
-  }, [orders]);
+  const topSelling = Array.isArray(stats?.topSelling) ? stats.topSelling : [];
 
   return (
     <main className="w-full min-h-screen py-10 px-6">

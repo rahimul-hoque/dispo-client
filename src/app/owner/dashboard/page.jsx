@@ -59,10 +59,17 @@ export default function OwnerDashboardPage() {
   // made this page slow. Key is null (no fetch) until devices resolves.
   const deviceIds = useMemo(() => (Array.isArray(devices) ? devices.map((d) => d._id) : []), [devices]);
   const productsKey =
-    deviceIds.length > 0 ? `/api/proxy/products?deviceId=${deviceIds.join(",")}&noImages=true` : null;
+    deviceIds.length > 0 ? `/api/proxy/products?deviceId=${deviceIds.join(",")}` : null;
   const { data: products = [], isLoading: productsLoading } = useSWR(productsKey, fetcher, { refreshInterval: 30000 });
 
-  const { data: orders = [], isLoading: ordersLoading } = useSWR("/api/proxy/orders", fetcher, { refreshInterval: 15000 });
+  // Revenue/top-seller numbers are computed server-side — fetching every
+  // order just to sum them got slower with every sale.
+  const tz = typeof Intl !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC";
+  const { data: stats, isLoading: ordersLoading } = useSWR(
+    `/api/proxy/orders/stats?tz=${encodeURIComponent(tz)}`,
+    fetcher,
+    { refreshInterval: 15000 }
+  );
 
   const loading = devicesLoading || productsLoading || ordersLoading;
 
@@ -79,10 +86,7 @@ export default function OwnerDashboardPage() {
     [myProducts]
   );
 
-  const totalRevenue = useMemo(
-    () => (Array.isArray(orders) ? orders.reduce((sum, o) => sum + (o.total || 0), 0) : 0),
-    [orders]
-  );
+  const totalRevenue = stats?.totalRevenue || 0;
 
   const stockByProduct = useMemo(
     () => myProducts.map((p) => ({ name: p.name, stock: p.stock || 0 })).slice(0, 12),
@@ -100,36 +104,9 @@ export default function OwnerDashboardPage() {
     return Object.entries(counts).map(([name, count]) => ({ name, count }));
   }, [myProducts, devices]);
 
-  // Revenue grouped by calendar day, oldest first — a real time series
-  // once more than one day of orders exists.
-  const revenueOverTime = useMemo(() => {
-    if (!Array.isArray(orders)) return [];
-    const byDay = {};
-    orders.forEach((o) => {
-      const day = new Date(o.createdAt).toLocaleDateString("en-CA"); // YYYY-MM-DD, sorts correctly as a string
-      byDay[day] = (byDay[day] || 0) + (o.total || 0);
-    });
-    return Object.entries(byDay)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([day, revenue]) => ({ day, revenue }));
-  }, [orders]);
+  const revenueOverTime = Array.isArray(stats?.revenueByDay) ? stats.revenueByDay : [];
 
-  // Aggregate quantity sold per product across every order's line items
-  // (orders are already correctly scoped server-side to this owner's
-  // devices, so no extra filtering needed here).
-  const topSelling = useMemo(() => {
-    if (!Array.isArray(orders)) return [];
-    const soldByName = {};
-    orders.forEach((o) => {
-      (o.items || []).forEach((item) => {
-        soldByName[item.name] = (soldByName[item.name] || 0) + item.qty;
-      });
-    });
-    return Object.entries(soldByName)
-      .map(([name, qty]) => ({ name, qty }))
-      .sort((a, b) => b.qty - a.qty)
-      .slice(0, 8);
-  }, [orders]);
+  const topSelling = Array.isArray(stats?.topSelling) ? stats.topSelling : [];
 
   return (
     <main className="w-full min-h-screen py-10 px-6">

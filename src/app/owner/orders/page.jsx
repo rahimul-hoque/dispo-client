@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { fetcher } from "@/lib/fetcher";
+import { usePaginatedOrders, statsKey } from "@/lib/use-orders";
+import { LoadMoreButton } from "@/components/load-more-button";
 import { Receipt, Server, CircleCheck, Hourglass, TriangleExclamation } from "@gravity-ui/icons";
 import { toast, Spinner } from "@heroui/react";
 
@@ -22,33 +24,31 @@ function formatDuration(ms) {
 }
 
 export default function OwnerOrdersPage() {
-  const { data: orders = [], isLoading: ordersLoading, mutate: mutateOrders } = useSWR("/api/proxy/orders", fetcher, {
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [deviceFilter, setDeviceFilter] = useState("all");
+  const {
+    orders,
+    isLoading: ordersLoading,
+    hasMore,
+    isLoadingMore,
+    loadMore,
+    updateOrder,
+  } = usePaginatedOrders({
+    status: statusFilter,
+    deviceId: deviceFilter,
     refreshInterval: 10000, // new orders and status changes arrive within 10s
   });
+  const { data: stats } = useSWR(statsKey(), fetcher, { refreshInterval: 10000 });
   const { data: devices = [], isLoading: devicesLoading } = useSWR("/api/proxy/devices", fetcher);
   const isLoading = ordersLoading || devicesLoading;
   const [completingId, setCompletingId] = useState(null);
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [deviceFilter, setDeviceFilter] = useState("all");
 
-  const counts = useMemo(() => {
-    const list = Array.isArray(orders) ? orders : [];
-    return {
-      completed: list.filter((o) => o.status === "completed").length,
-      failed: list.filter((o) => o.status === "failed").length,
-      active: list.filter((o) => o.status === "pending" || o.status === "dispensing").length,
-    };
-  }, [orders]);
-
-  const filtered = useMemo(
-    () =>
-      (Array.isArray(orders) ? orders : []).filter(
-        (o) =>
-          (statusFilter === "all" || o.status === statusFilter) &&
-          (deviceFilter === "all" || o.deviceId === deviceFilter)
-      ),
-    [orders, statusFilter, deviceFilter]
-  );
+  const counts = {
+    completed: stats?.counts?.completed ?? 0,
+    failed: stats?.counts?.failed ?? 0,
+    active: (stats?.counts?.pending ?? 0) + (stats?.counts?.dispensing ?? 0),
+  };
+  const filtered = orders;
 
   const deviceNameById = useMemo(
     () => Object.fromEntries((Array.isArray(devices) ? devices : []).map((d) => [d._id, d.name])),
@@ -64,10 +64,7 @@ export default function OwnerOrdersPage() {
         toast.danger("Couldn't complete order", { description: result.error || "Please try again." });
         return;
       }
-      mutateOrders(
-        (prev) => (prev || []).map((o) => (o._id === order._id ? { ...o, status: "completed" } : o)),
-        { revalidate: false }
-      );
+      updateOrder(order._id, { status: "completed" });
       toast.success("Order marked as dispensed");
     } catch (error) {
       console.log(error);
@@ -135,7 +132,7 @@ export default function OwnerOrdersPage() {
               <Receipt className="h-8 w-8 text-tertiary mb-3" />
               <p className="font-headline-sm text-headline-sm text-on-surface">No orders yet</p>
               <p className="font-body-md text-body-md text-on-surface-variant mt-1 max-w-xs">
-                {orders.length === 0
+                {statusFilter === "all" && deviceFilter === "all"
                   ? "Orders placed through /shop/checkout will show up here."
                   : "No orders match these filters."}
               </p>
@@ -225,6 +222,7 @@ export default function OwnerOrdersPage() {
               </div>
             ))
           )}
+          {!isLoading && <LoadMoreButton hasMore={hasMore} isLoadingMore={isLoadingMore} onClick={loadMore} />}
         </div>
       </div>
     </main>

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useSWRList } from "@/lib/use-swr-list";
 import Link from "next/link";
 import { Server, Magnifier, ArrowRight } from "@gravity-ui/icons";
 import { toast } from "@heroui/react";
@@ -17,9 +18,16 @@ function DeviceRowSkeleton() {
 
 export default function ManageDevicesPage() {
   const { data: session } = authClient.useSession();
-  const [devices, setDevices] = useState([]);
-  const [users, setUsers] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const onLoadError = () =>
+    toast.danger("Couldn't load devices", { description: "Check your connection and try again." });
+  // Refreshes every 5s so "online right now" stays current (SWR skips
+  // refreshes while the tab is hidden).
+  const { list: devices, isLoading: devicesLoading } = useSWRList("/api/proxy/devices", {
+    refreshInterval: 5000,
+    onError: onLoadError,
+  });
+  const { list: users, isLoading: usersLoading } = useSWRList("/api/proxy/users", { onError: onLoadError });
+  const isLoading = devicesLoading || usersLoading;
   const [query, setQuery] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("all"); // "all" | "mine"
   const [onlineOnly, setOnlineOnly] = useState(false);
@@ -28,37 +36,6 @@ export default function ManageDevicesPage() {
     () => Object.fromEntries(users.map((u) => [u._id, u.name || u.email])),
     [users]
   );
-
-  useEffect(() => {
-    const load = async () => {
-      setIsLoading(true);
-      try {
-        const [devicesRes, usersRes] = await Promise.all([
-          fetch("/api/proxy/devices"),
-          fetch("/api/proxy/users"),
-        ]);
-        setDevices(await devicesRes.json());
-        setUsers(await usersRes.json());
-      } catch (error) {
-        console.log(error);
-        toast.danger("Couldn't load devices", { description: "Check your connection and try again." });
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    load();
-
-    // Quiet refresh (no skeleton) so "online right now" stays current.
-    const id = setInterval(async () => {
-      if (document.hidden) return; // don't poll from a background tab
-      try {
-        const res = await fetch("/api/proxy/devices");
-        const data = await res.json();
-        if (Array.isArray(data)) setDevices(data);
-      } catch {}
-    }, 5000);
-    return () => clearInterval(id);
-  }, []);
 
   const onlineCount = useMemo(
     () => (Array.isArray(devices) ? devices.filter((d) => d.online).length : 0),

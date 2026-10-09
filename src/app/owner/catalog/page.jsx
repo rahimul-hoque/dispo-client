@@ -1,5 +1,6 @@
 "use client";
 
+import { productImageUrl } from "@/lib/product-image";
 import { useEffect, useMemo, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
@@ -41,15 +42,21 @@ function CatalogPageContent() {
   const searchParams = useSearchParams();
   const preselectedDeviceId = searchParams.get("device");
 
+  const { data: devicesRaw = [], isLoading: isLoadingDevices } = useSWR("/api/proxy/devices", fetcher);
+  const devices = useMemo(() => (Array.isArray(devicesRaw) ? devicesRaw : []), [devicesRaw]);
+
+  // Only this account's own devices' products, fetched once the device
+  // list is known — not the whole system's catalog filtered down here.
+  const productsKey =
+    devices.length > 0 ? `/api/proxy/products?deviceId=${devices.map((d) => d._id).join(",")}` : null;
   const {
-    data: products = [],
+    data: productsRaw = [],
     isLoading: isLoadingProducts,
     mutate: mutateProducts,
-  } = useSWR("/api/proxy/products", fetcher, {
+  } = useSWR(productsKey, fetcher, {
     onError: () => toast.danger("Couldn't load your catalog", { description: "Check your connection and try again." }),
   });
-  const { data: devicesRaw = [], isLoading: isLoadingDevices } = useSWR("/api/proxy/devices", fetcher);
-  const devices = Array.isArray(devicesRaw) ? devicesRaw : [];
+  const products = useMemo(() => (Array.isArray(productsRaw) ? productsRaw : []), [productsRaw]);
   const [deviceFilter, setDeviceFilter] = useState(""); // "" = show every device
 
   const {
@@ -111,7 +118,8 @@ function CatalogPageContent() {
   const [addImageBase64, setAddImageBase64] = useState(null);
 
   const [editImagePreview, setEditImagePreview] = useState(null);
-  const [editImageBase64, setEditImageBase64] = useState(null);
+  // undefined = photo unchanged (not re-sent on save); a data URL replaces it.
+  const [editImageBase64, setEditImageBase64] = useState(undefined);
 
   // Shared by both the Add and Edit forms — reads the chosen file, checks a
   // sane size limit (base64 inflates size ~33%, and we're storing this
@@ -135,11 +143,8 @@ function CatalogPageContent() {
     reader.readAsDataURL(file);
   };
 
-  // GET /api/products is intentionally public/unfiltered (customers browsing
-  // /shop need every owner's products). The owner's own catalog must NOT
-  // show everyone's inventory though — so we scope it here, client-side,
-  // using the devices list, which IS already correctly filtered to devices
-  // this account actually owns (or every device, if this account is admin).
+  // Products are already fetched for owned devices only (productsKey); this
+  // just guards against a stale cache entry from before a device changed.
   const myProducts = useMemo(
     () => products.filter((p) => p.deviceId in deviceMap),
     [products, deviceMap]
@@ -221,8 +226,8 @@ function CatalogPageContent() {
       deviceId: product.deviceId || "",
       slotNumber: product.slotNumber,
     });
-    setEditImagePreview(product.image || null);
-    setEditImageBase64(product.image || null);
+    setEditImagePreview(productImageUrl(product));
+    setEditImageBase64(undefined);
     editModal.open();
   };
 
@@ -231,7 +236,7 @@ function CatalogPageContent() {
       const res = await fetch(`/api/proxy/products/${editingProduct._id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, image: editImageBase64 }),
+        body: JSON.stringify(editImageBase64 === undefined ? data : { ...data, image: editImageBase64 }),
       });
       const result = await res.json();
       if (!res.ok) {
@@ -240,7 +245,11 @@ function CatalogPageContent() {
       }
       mutateProducts(
         (current = []) =>
-          current.map((p) => (p._id === editingProduct._id ? { ...p, ...data, image: editImageBase64 } : p)),
+          current.map((p) =>
+            p._id === editingProduct._id
+              ? { ...p, ...data, hasImage: result.hasImage, imageVersion: result.imageVersion }
+              : p
+          ),
         { revalidate: false }
       );
       toast.success("Product updated", { description: `${data.name} was saved.` });
@@ -477,8 +486,8 @@ function CatalogPageContent() {
                   className="flex items-center gap-4 rounded-[1.75rem] bg-surface-container-low p-5 shadow-[8px_8px_20px_rgba(184,196,214,0.55),-8px_-8px_20px_rgba(255,255,255,0.9)]"
                 >
                   <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-surface shadow-[inset_2px_2px_5px_rgba(184,196,214,0.5),inset_-2px_-2px_5px_rgba(255,255,255,0.9)]">
-                    {product.image ? (
-                      <img src={product.image} alt={product.name} className="h-full w-full object-cover" />
+                    {productImageUrl(product) ? (
+                      <img src={productImageUrl(product)} alt={product.name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                     ) : (
                       <Box className="h-6 w-6 text-tertiary" />
                     )}

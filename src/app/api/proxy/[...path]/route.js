@@ -19,6 +19,17 @@ async function forward(request, { params }) {
     const apiBase = process.env.EXPRESS_API_URL || "http://localhost:8000";
     try {
       const res = await fetch(`${apiBase}/api/${path}${search}`, init);
+
+      // Binary responses (product images) pass straight through, keeping
+      // the backend's caching headers so the browser caches them.
+      const contentType = res.headers.get("content-type") || "";
+      if (res.ok && !contentType.includes("application/json")) {
+        const headers = { "Content-Type": contentType };
+        const cacheControl = res.headers.get("cache-control");
+        if (cacheControl) headers["Cache-Control"] = cacheControl;
+        return new Response(await res.arrayBuffer(), { status: res.status, headers });
+      }
+
       const text = await res.text();
       let data;
       try {

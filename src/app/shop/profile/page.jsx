@@ -1,22 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useSWRList } from "@/lib/use-swr-list";
 import { authClient } from "@/lib/auth-client";
 import { Person, Envelope, Handset, Receipt } from "@gravity-ui/icons";
 
 export default function ProfilePage() {
   const { data: session, isPending } = authClient.useSession();
-  const [orders, setOrders] = useState([]);
-  const [loadingOrders, setLoadingOrders] = useState(true);
+  const { list: orders, isLoading: loadingOrders } = useSWRList("/api/proxy/orders/mine");
   const [imgError, setImgError] = useState(false);
-
-  useEffect(() => {
-    fetch("/api/proxy/orders/mine")
-      .then((res) => res.json())
-      .then((data) => setOrders(Array.isArray(data) ? data : []))
-      .catch((error) => console.log(error))
-      .finally(() => setLoadingOrders(false));
-  }, []);
 
   if (isPending) {
     return (
@@ -27,7 +19,8 @@ export default function ProfilePage() {
   }
 
   const user = session?.user;
-  const totalSpent = orders.reduce((sum, o) => sum + (o.total || 0), 0);
+  // Failed orders were never dispensed (stock refunded), so they don't count.
+  const totalSpent = orders.reduce((sum, o) => (o.status === "failed" ? sum : sum + (o.total || 0)), 0);
 
   return (
     <main className="mx-auto max-w-lg px-6 py-10">

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useSWRList } from "@/lib/use-swr-list";
 import { useForm } from "react-hook-form";
 import { QRCodeSVG } from "qrcode.react";
 import Link from "next/link";
@@ -27,8 +28,12 @@ function DeviceCardSkeleton() {
 }
 
 export default function DevicesPage() {
-  const [devices, setDevices] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // Refreshes every 5s so the Online/Offline badge stays current (SWR
+  // skips refreshes while the tab is hidden).
+  const { list: devices, setList: setDevices, isLoading } = useSWRList("/api/proxy/devices", {
+    refreshInterval: 5000,
+    onError: () => toast.danger("Couldn't load devices", { description: "Check your connection and try again." }),
+  });
 
   const editModal = useOverlayState();
   const [editingDevice, setEditingDevice] = useState(null);
@@ -37,34 +42,6 @@ export default function DevicesPage() {
   const deleteModal = useOverlayState();
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
-
-  const fetchDevices = async () => {
-    setIsLoading(true);
-    try {
-      const res = await fetch("/api/proxy/devices");
-      const data = await res.json();
-      setDevices(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.log(error);
-      toast.danger("Couldn't load devices", { description: "Check your connection and try again." });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchDevices();
-    // Quiet refresh so the Online/Offline badge stays current.
-    const id = setInterval(async () => {
-      if (document.hidden) return; // don't poll from a background tab
-      try {
-        const res = await fetch("/api/proxy/devices");
-        const data = await res.json();
-        if (Array.isArray(data)) setDevices(data);
-      } catch {}
-    }, 5000);
-    return () => clearInterval(id);
-  }, []);
 
   const openEdit = (device) => {
     setEditingDevice(device);
@@ -88,7 +65,7 @@ export default function DevicesPage() {
         toast.danger("Couldn't update device", { description: result.error || "Please try again." });
         return;
       }
-      setDevices((prev) => prev.map((d) => (d._id === editingDevice._id ? result : d)));
+      setDevices((prev) => prev.map((d) => (d._id === editingDevice._id ? { ...d, ...result } : d)));
       toast.success("Device updated");
       editModal.close();
       setEditingDevice(null);

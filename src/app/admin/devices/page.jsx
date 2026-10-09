@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSWRList } from "@/lib/use-swr-list";
 import { QRCodeSVG } from "qrcode.react";
 import {
   Server,
@@ -31,9 +32,13 @@ function DeviceCardSkeleton() {
 }
 
 export default function AdminDevicesPage() {
-  const [devices, setDevices] = useState([]);
-  const [users, setUsers] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const onLoadError = () =>
+    toast.danger("Couldn't load devices", { description: "Check your connection and try again." });
+  const { list: devices, setList: setDevices, isLoading: devicesLoading } = useSWRList("/api/proxy/devices", {
+    onError: onLoadError,
+  });
+  const { list: users, isLoading: usersLoading } = useSWRList("/api/proxy/users", { onError: onLoadError });
+  const isLoading = devicesLoading || usersLoading;
 
   // Wizard state: "closed" | "form" | "ble"
   const [wizardStep, setWizardStep] = useState("closed");
@@ -61,25 +66,7 @@ export default function AdminDevicesPage() {
     [users]
   );
 
-  const load = async () => {
-    setIsLoading(true);
-    try {
-      const [devicesRes, usersRes] = await Promise.all([
-        fetch("/api/proxy/devices"),
-        fetch("/api/proxy/users"),
-      ]);
-      setDevices(await devicesRes.json());
-      setUsers(await usersRes.json());
-    } catch (error) {
-      console.log(error);
-      toast.danger("Couldn't load devices", { description: "Check your connection and try again." });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   useEffect(() => {
-    load();
     setIsSupported(isBluetoothSupported());
   }, []);
 
