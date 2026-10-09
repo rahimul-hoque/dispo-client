@@ -1,5 +1,6 @@
 "use client";
 
+import { DeviceDeleteWarning } from "@/components/device-delete-warning";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSWRList } from "@/lib/use-swr-list";
 import { QRCodeSVG } from "qrcode.react";
@@ -220,14 +221,17 @@ export default function AdminDevicesPage() {
     if (!deleteTarget) return;
     setIsDeleting(true);
     try {
-      const res = await fetch(`/api/proxy/devices/${deleteTarget._id}`, { method: "DELETE" });
+      // Products on this device are deleted with it; the dialog listed them.
+      const res = await fetch(`/api/proxy/devices/${deleteTarget._id}?deleteProducts=true`, { method: "DELETE" });
       const result = await res.json();
       if (!res.ok) {
         toast.danger("Couldn't delete device", { description: result.error || "Please try again." });
         return;
       }
       setDevices((prev) => prev.filter((d) => d._id !== deleteTarget._id));
-      toast.success("Device deleted");
+      toast.success("Device deleted", {
+        description: result.productsDeleted ? `${result.productsDeleted} product(s) removed with it.` : undefined,
+      });
       deleteModal.close();
       setDeleteTarget(null);
     } catch (error) {
@@ -565,11 +569,7 @@ export default function AdminDevicesPage() {
                 <Modal.Heading>Delete this device?</Modal.Heading>
               </Modal.Header>
               <Modal.Body>
-                <p className="font-body-md text-body-md text-on-surface-variant">
-                  {deleteTarget?.ownerId
-                    ? `"${deleteTarget.name}" and its QR code will stop working. Any products still assigned to it must be moved or deleted first.`
-                    : "This device hasn't been claimed by anyone yet. Deleting it permanently invalidates its QR code — anyone holding the physical sticker will no longer be able to claim it."}
-                </p>
+                <DeviceDeleteWarning device={deleteTarget} />
               </Modal.Body>
               <Modal.Footer>
                 <button
