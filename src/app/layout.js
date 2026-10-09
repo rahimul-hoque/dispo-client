@@ -2,6 +2,7 @@ import { Plus_Jakarta_Sans, Inter } from "next/font/google";
 import { Toast } from "@heroui/react";
 import { CartProvider } from "@/lib/cart-context";
 import { GlobalNavbar } from "@/components/global-navbar";
+import { SplashHider } from "@/components/splash-hider";
 import "./globals.css";
 
 const plusJakarta = Plus_Jakarta_Sans({
@@ -33,6 +34,7 @@ export default function RootLayout({ children }) {
           {children}
         </CartProvider>
         <Toast.Provider />
+        <SplashHider />
       </body>
     </html>
   );
