@@ -15,6 +15,9 @@ const config: CapacitorConfig = {
   server: {
     url: 'https://dispo-client.vercel.app',
     cleartext: false,
+    // Bundled page shown instead of Android's raw "Webpage not available"
+    // when the live site can't load (offline, timeout, server error).
+    errorPath: 'offline.html',
   },
   plugins: {
     // Splash stays up while the remote site loads; SplashHider (in the root

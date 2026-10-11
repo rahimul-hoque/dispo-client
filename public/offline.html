@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dispo</title>
+<!--
+  Shown by the Android app (capacitor.config.ts server.errorPath) when the
+  live site can't be loaded: no connection, a timeout, or a server error.
+  Bundled inside the app, so it can't load anything from the network:
+  the logo is inlined and there are no external fonts or scripts.
+-->
+<style>
+  :root { --bg: #f5f6f1; --text: #181c20; --muted: #5b4137; --primary: #ff5d00; --card: #ffffff; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px 16px;
+  }
+  main { width: 100%; max-width: 360px; text-align: center; }
+  img { width: 88px; height: 88px; border-radius: 24px; }
+  h1 { font-size: 22px; margin: 20px 0 8px; }
+  p { color: var(--muted); font-size: 15px; line-height: 1.5; margin: 0 0 24px; }
+  button {
+    width: 100%; border: 0; border-radius: 999px; padding: 14px 20px;
+    background: var(--primary); color: #fff; font-size: 16px; font-weight: 600;
+    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  }
+  button:disabled { opacity: .75; }
+  .spinner {
+    width: 16px; height: 16px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.45); border-top-color: #fff;
+    animation: spin .8s linear infinite; display: none;
+  }
+  .busy .spinner { display: inline-block; }
+  .hint { font-size: 13px; margin-top: 16px; margin-bottom: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<main>
+  <img src="data:image/jpeg;base64,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" alt="Dispo">
+  <h1 id="title">Can't reach Dispo</h1>
+  <p id="message">Check your internet connection. We'll reconnect automatically as soon as it's back.</p>
+  <button id="retry" type="button"><span class="spinner"></span><span id="label">Try again</span></button>
+  <p class="hint" id="hint"></p>
+</main>
+<script>
+  // The app's start page. This file is served from the same origin, so
+  // navigating there reloads the live site.
+  var APP_URL = location.origin + "/";
+  var button = document.getElementById("retry");
+  var label = document.getElementById("label");
+  var hint = document.getElementById("hint");
+
+  function setOfflineCopy() {
+    if (!navigator.onLine) {
+      document.getElementById("title").textContent = "You're offline";
+      document.getElementById("message").textContent =
+        "Turn on Wi-Fi or mobile data. We'll reconnect automatically as soon as you're back online.";
+    }
+  }
+
+  function retry() {
+    button.disabled = true;
+    button.classList.add("busy");
+    label.textContent = "Connecting…";
+    location.replace(APP_URL);
+  }
+
+  button.addEventListener("click", retry);
+  // Reconnect by itself when the connection returns, and keep trying
+  // every 15s in case the site was only briefly unreachable.
+  window.addEventListener("online", retry);
+  var seconds = 15;
+  setInterval(function () {
+    if (button.disabled) return;
+    seconds -= 1;
+    if (seconds <= 0) { retry(); return; }
+    hint.textContent = navigator.onLine ? "Retrying in " + seconds + "s" : "";
+  }, 1000);
+  setOfflineCopy();
+</script>
+</body>
+</html>
