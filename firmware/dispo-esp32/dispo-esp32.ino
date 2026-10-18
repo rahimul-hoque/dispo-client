@@ -233,7 +233,7 @@ void connectMQTT() {
   if (millis() - lastReconnectAttempt < mqttRetryDelay) return;
   lastReconnectAttempt = millis();
 
-  Serial.printf("[mqtt] Connecting to HiveMQ Cloud as %s...\n", g_deviceId.c_str());
+  Serial.printf("[mqtt] Connecting to EMQX Cloud as %s...\n", g_deviceId.c_str());
 
   String statusTopic = "devices/" + g_deviceId + "/status";
   String wakeTopic   = "devices/" + g_deviceId + "/wake";

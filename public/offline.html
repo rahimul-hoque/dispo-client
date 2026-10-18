@@ -49,9 +49,9 @@
   <p class="hint" id="hint"></p>
 </main>
 <script>
-  // The app's start page. This file is served from the same origin, so
-  // navigating there reloads the live site.
-  var APP_URL = location.origin + "/";
+  // When loaded via Capacitor errorPath, location.origin is "http://localhost",
+  // which causes Android to kick out to an external browser. Always target the live server URL.
+  var APP_URL = "https://dispo-client.vercel.app/";
   var button = document.getElementById("retry");
   var label = document.getElementById("label");
   var hint = document.getElementById("hint");
