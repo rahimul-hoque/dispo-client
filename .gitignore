@@ -48,3 +48,6 @@ yarn-error.log*
 # values; copy firmware/dispo-esp32/secrets.example.h to secrets.h locally
 firmware/**/secrets.h
 next-env.d.ts
+
+# Agent / AI local context file
+context.md

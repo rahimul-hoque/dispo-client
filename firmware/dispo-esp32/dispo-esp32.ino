@@ -100,7 +100,9 @@ static uint32_t mqttRetryDelay = MQTT_RETRY_MIN_MS;
 // more room than the HTTP poll: it's the slow part, and cutting it too
 // short made every MQTT reconnect fail.
 static const uint16_t TLS_HANDSHAKE_TIMEOUT_S = 10;
-static const uint16_t HTTP_TIMEOUT_MS = 4000;
+// Increased from 4000ms to 10000ms to accommodate Vercel serverless cold starts
+// when waking up from idle on first orders.
+static const uint16_t HTTP_TIMEOUT_MS = 10000;
 
 // ─── Relay State ─────────────────────────────────────────────────
 struct RelayState {
@@ -313,7 +315,7 @@ static bool reportToServer(const String &path, const String &body) {
       return false;
     }
     Serial.printf("[http] %s failed (%d), attempt %d/3\n", path.c_str(), code, attempt);
-    delay(300 * attempt);
+    delay(1000 * attempt);
   }
   return false;
 }
