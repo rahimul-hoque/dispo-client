@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, useCallback } from "react";
 
 const CartContext = createContext(null);
 
@@ -43,7 +43,7 @@ export function CartProvider({ children }) {
   // from a different device clears whatever was there before. Items are
   // keyed by slotNumber (unique within one device's cart), not productId —
   // slotNumber is what the physical machine actually dispenses from.
-  const addItem = (product, forDeviceId) => {
+  const addItem = useCallback((product, forDeviceId) => {
     setItems((prev) => {
       const isSwitchingDevice = deviceId && deviceId !== forDeviceId && prev.length > 0;
       const base = isSwitchingDevice ? [] : prev;
@@ -56,24 +56,24 @@ export function CartProvider({ children }) {
       return [...base, { slotNumber: product.slotNumber, name: product.name, price: product.price, qty: 1 }];
     });
     setDeviceId(forDeviceId);
-  };
+  }, [deviceId]);
 
-  const updateQty = (slotNumber, qty) => {
+  const updateQty = useCallback((slotNumber, qty) => {
     if (qty <= 0) {
       setItems((prev) => prev.filter((i) => i.slotNumber !== slotNumber));
       return;
     }
     setItems((prev) => prev.map((i) => (i.slotNumber === slotNumber ? { ...i, qty } : i)));
-  };
+  }, []);
 
-  const removeItem = (slotNumber) => {
+  const removeItem = useCallback((slotNumber) => {
     setItems((prev) => prev.filter((i) => i.slotNumber !== slotNumber));
-  };
+  }, []);
 
-  const clearCart = () => {
+  const clearCart = useCallback(() => {
     setItems([]);
     setDeviceId(null);
-  };
+  }, []);
 
   const total = items.reduce((sum, i) => sum + i.price * i.qty, 0);
   const count = items.reduce((sum, i) => sum + i.qty, 0);

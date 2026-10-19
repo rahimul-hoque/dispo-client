@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { fetcher } from "@/lib/fetcher";
@@ -40,7 +40,7 @@ function OrderStatusTracker({ orderId, deviceId: propDeviceId }) {
   const Icon = cfg.icon;
   const targetDevice = order?.deviceId || propDeviceId;
 
-  const items = order?.items || [];
+  const items = Array.isArray(order?.items) ? order.items : [];
   const totalUnits = items.reduce((s, i) => s + (i.qty || 0), 0);
   const dispensedUnits = items.reduce((s, i) => s + (i.dispensedQty || 0), 0);
 
@@ -57,7 +57,7 @@ function OrderStatusTracker({ orderId, deviceId: propDeviceId }) {
       <h1 className="font-headline-lg text-headline-lg text-on-surface">{cfg.label}</h1>
 
       <p className="font-body-md text-body-md text-on-surface-variant mt-1 max-w-xs">
-        Order #{orderId.slice(-6)} — ৳{order?.total ?? "…"}
+        Order #{orderId ? String(orderId).slice(-6) : "…"} — ৳{order?.total ?? "…"}
       </p>
 
       {order?.payment?.status && (
@@ -116,7 +116,12 @@ function CheckoutContent() {
     items.length > 0 && !activeOrderId ? deviceId : null
   );
 
+  const handledPaymentRef = useRef(false);
+
   useEffect(() => {
+    if (!paymentParam || handledPaymentRef.current) return;
+    handledPaymentRef.current = true;
+
     if (paymentParam === "failed") {
       toast.danger("Payment Failed", { description: "Your transaction was not completed. Please try again." });
     } else if (paymentParam === "cancelled") {
