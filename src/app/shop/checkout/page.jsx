@@ -19,7 +19,7 @@ const STATUS_CONFIG = {
   cancelled: { icon: TriangleExclamation, label: "Order cancelled", color: "text-error", spin: false },
 };
 
-function OrderStatusTracker({ orderId, deviceId: propDeviceId }) {
+function OrderStatusTracker({ orderId, deviceId: propDeviceId, onDispenseComplete }) {
   const router = useRouter();
 
   const { data: order } = useSWR(
@@ -43,6 +43,17 @@ function OrderStatusTracker({ orderId, deviceId: propDeviceId }) {
   const items = Array.isArray(order?.items) ? order.items : [];
   const totalUnits = items.reduce((s, i) => s + (i.qty || 0), 0);
   const dispensedUnits = items.reduce((s, i) => s + (i.dispensedQty || 0), 0);
+
+  // Clear cart ONLY when the physical machine confirms dispense completed successfully!
+  const hasClearedCartRef = useRef(false);
+  useEffect(() => {
+    if (status === "completed" && !hasClearedCartRef.current) {
+      hasClearedCartRef.current = true;
+      if (onDispenseComplete) {
+        onDispenseComplete();
+      }
+    }
+  }, [status, onDispenseComplete]);
 
   return (
     <main className="flex min-h-[calc(100vh-73px)] flex-col items-center justify-center px-6 text-center">
@@ -87,13 +98,30 @@ function OrderStatusTracker({ orderId, deviceId: propDeviceId }) {
         </p>
       )}
 
-      {(status === "completed" || status === "failed" || status === "cancelled") && (
+      {status === "completed" && (
         <button
           onClick={() => router.push(targetDevice ? `/shop/browse?device=${targetDevice}` : "/shop")}
           className="mt-6 rounded-full bg-primary-container px-6 py-2.5 font-label-lg text-label-lg text-on-primary cursor-pointer hover:opacity-90 transition-opacity"
         >
           Continue browsing
         </button>
+      )}
+
+      {(status === "failed" || status === "cancelled") && (
+        <div className="mt-6 flex flex-col sm:flex-row items-center gap-3">
+          <button
+            onClick={() => router.push("/shop/cart")}
+            className="w-full sm:w-auto rounded-full bg-primary-container px-6 py-2.5 font-label-lg text-label-lg text-on-primary cursor-pointer hover:opacity-90 transition-opacity"
+          >
+            Review Cart & Try Again
+          </button>
+          <button
+            onClick={() => router.push(targetDevice ? `/shop/browse?device=${targetDevice}` : "/shop")}
+            className="w-full sm:w-auto rounded-full bg-surface-container-high px-6 py-2.5 font-label-lg text-label-lg text-on-surface cursor-pointer hover:opacity-90 transition-opacity"
+          >
+            Browse Products
+          </button>
+        </div>
       )}
     </main>
   );
@@ -110,7 +138,9 @@ function CheckoutContent() {
   const [paymentMethod, setPaymentMethod] = useState("sslcommerz"); // 'sslcommerz' or 'test'
   const [confirmedOrder, setConfirmedOrder] = useState(null);
 
-  const activeOrderId = orderIdParam || confirmedOrder?._id;
+  // If payment failed or was cancelled, stay on the checkout screen with the cart preserved!
+  const isPaymentFailure = paymentParam === "failed" || paymentParam === "cancelled";
+  const activeOrderId = !isPaymentFailure && (orderIdParam || confirmedOrder?._id);
 
   const { available, code: unavailableCode, message: unavailableMessage } = useDeviceAvailability(
     items.length > 0 && !activeOrderId ? deviceId : null
@@ -123,14 +153,20 @@ function CheckoutContent() {
     handledPaymentRef.current = true;
 
     if (paymentParam === "failed") {
-      toast.danger("Payment Failed", { description: "Your transaction was not completed. Please try again." });
+      toast.danger("Payment Failed", {
+        description: "Your transaction was not completed. Your items are still in your cart.",
+      });
     } else if (paymentParam === "cancelled") {
-      toast.warning("Payment Cancelled", { description: "You cancelled the payment process." });
+      toast.warning("Payment Cancelled", {
+        description: "You cancelled the payment. Your items are still in your cart.",
+      });
     } else if (paymentParam === "success") {
-      toast.success("Payment Received!", { description: "Your order is being sent to the machine." });
-      clearCart();
+      toast.success("Payment Received!", {
+        description: "Your order is being sent to the machine.",
+      });
+      // Cart will be cleared automatically once dispense is verified complete!
     }
-  }, [paymentParam, clearCart]);
+  }, [paymentParam]);
 
   const placeOrder = async () => {
     if (!available) return;
@@ -153,14 +189,14 @@ function CheckoutContent() {
 
       if (result.paymentUrl) {
         // Redirect to SSLCOMMERZ gateway (bKash / Nagad / Cards)
-        clearCart();
+        // We deliberately keep the cart intact until dispensing actually succeeds!
         window.location.href = result.paymentUrl;
         return;
       }
 
-      // Test checkout flow (immediate confirmation)
+      // Test checkout flow (immediate tracking)
+      // The cart will be cleared when the hardware confirms dispense!
       setConfirmedOrder(result);
-      clearCart();
     } catch (error) {
       console.error(error);
       toast.danger("Couldn't place order", { description: "Something went wrong." });
@@ -170,13 +206,25 @@ function CheckoutContent() {
   };
 
   if (activeOrderId) {
-    return <OrderStatusTracker orderId={activeOrderId} deviceId={deviceId} />;
+    return (
+      <OrderStatusTracker
+        orderId={activeOrderId}
+        deviceId={deviceId}
+        onDispenseComplete={clearCart}
+      />
+    );
   }
 
   if (items.length === 0) {
     return (
-      <main className="flex min-h-[calc(100vh-73px)] items-center justify-center px-6 text-center">
-        <p className="font-body-md text-body-md text-on-surface-variant">Your cart is empty.</p>
+      <main className="flex min-h-[calc(100vh-73px)] flex-col items-center justify-center px-6 text-center">
+        <p className="font-body-md text-body-md text-on-surface-variant mb-4">Your cart is empty.</p>
+        <button
+          onClick={() => router.push(deviceId ? `/shop/browse?device=${deviceId}` : "/shop")}
+          className="rounded-full bg-primary-container px-6 py-2.5 font-label-lg text-label-lg text-on-primary cursor-pointer hover:opacity-90 transition-opacity"
+        >
+          Find products
+        </button>
       </main>
     );
   }
